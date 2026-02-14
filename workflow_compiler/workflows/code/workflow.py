@@ -16,6 +16,7 @@ class LiveCodeBenchWorkflowDSL(WorkflowModule):
         self.sc_ensemble = AgentNode("sc_ensemble")
         self.test = ToolNode("test", impl="run_code_tests")
         self.reflection_test = AgentNode("reflection_test")
+        self.select_final_solution = ToolNode("select_final_solution", impl="first_nonempty")
 
     def forward(self, query: Dict[str, Any]):
         problem = query["problem"]
@@ -32,6 +33,7 @@ class LiveCodeBenchWorkflowDSL(WorkflowModule):
         ]
         best = self.sc_ensemble(problem=problem, solutions=solutions)
         current = best
+        reflection_candidates = []
         for _ in range(3):
             test_out = self.test(
                 problem=problem,
@@ -49,10 +51,18 @@ class LiveCodeBenchWorkflowDSL(WorkflowModule):
                 error_type=test_out["error_type"],
                 entry_point=entry_point,
             )
+            reflection_candidates.append(current)
+
+        # In compiled DSL, break-branches can bypass later reflection nodes.
+        # Select the most recent non-empty executed reflection output, else fallback to ensemble best.
+        final_solution = self.select_final_solution(
+            primary=list(reversed(reflection_candidates)),
+            fallback=[best],
+        )
         return {
-            "final_answer": current,
-            "full_solution": current,
-            "final_solution": current,
+            "final_answer": final_solution,
+            "full_solution": final_solution,
+            "final_solution": final_solution,
         }
 
 

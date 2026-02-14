@@ -12,6 +12,84 @@ from workflow_compiler.workflows.dsl_registry import get_workflow_module
 from workflow_compiler.core.logs import logger
 
 
+def _is_empty_output(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, (list, tuple, dict)):
+        return len(value) == 0
+    return False
+
+
+def _extract_nonempty_output_value(value: Any) -> Optional[Any]:
+    if _is_empty_output(value):
+        return None
+    if isinstance(value, dict):
+        for key in ("final_answer", "answer", "full_solution", "final_solution", "solution", "response"):
+            candidate = _extract_nonempty_output_value(value.get(key))
+            if candidate is not None:
+                return candidate
+        return None
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            candidate = _extract_nonempty_output_value(item)
+            if candidate is not None:
+                return candidate
+        return None
+    if isinstance(value, str):
+        return value.strip()
+    return value
+
+
+def _resolve_workflow_output(
+    outputs: Dict[str, Any],
+    state: Dict[str, Any],
+) -> Optional[Any]:
+    for key in ("final_answer", "full_solution", "final_solution"):
+        candidate = _extract_nonempty_output_value(outputs.get(key))
+        if candidate is not None:
+            return candidate
+
+    # Fallback for pruned/conditional graphs: use the latest executed non-empty node output.
+    for node_output in reversed(list(state.values())):
+        candidate = _extract_nonempty_output_value(node_output)
+        if candidate is not None:
+            return candidate
+    return None
+
+
+def _normalize_workflow_outputs(
+    workflow_type: str,
+    outputs: Dict[str, Any],
+    state: Dict[str, Any],
+) -> None:
+    resolved = _resolve_workflow_output(outputs, state)
+    if resolved is None:
+        logger.warning(
+            f"{workflow_type} workflow produced no non-empty output. "
+            "This can happen if pruned/conditional refs point to non-executed nodes."
+        )
+        return
+
+    if _is_empty_output(outputs.get("final_answer")):
+        outputs["final_answer"] = resolved
+
+    if workflow_type == "livecodebench":
+        # For code tasks we keep all canonical output keys aligned to the same code blob.
+        outputs["full_solution"] = outputs.get("full_solution") if not _is_empty_output(outputs.get("full_solution")) else resolved
+        outputs["final_solution"] = outputs.get("final_solution") if not _is_empty_output(outputs.get("final_solution")) else outputs["full_solution"]
+        outputs["final_answer"] = outputs.get("final_answer") if not _is_empty_output(outputs.get("final_answer")) else outputs["final_solution"]
+        return
+
+    if _is_empty_output(outputs.get("full_solution")):
+        outputs["full_solution"] = outputs.get("final_solution")
+    if _is_empty_output(outputs.get("full_solution")):
+        outputs["full_solution"] = resolved
+    if _is_empty_output(outputs.get("final_solution")):
+        outputs["final_solution"] = outputs.get("full_solution")
+
+
 def _strip_difficulty_fields(sample: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(sample, dict):
         return sample
@@ -224,14 +302,15 @@ async def run_dsl_query(
     executor = DslExecutor(spec, workflow_type, config)
 
     outputs, steps, _state = await executor.run(preprocess.get("inputs", {}))
+    _normalize_workflow_outputs(str(workflow_type).lower(), outputs, _state)
 
     # Build trace entry
     if workflow_type in ("math", "gsm8k"):
         trace_entry = _build_trace_math(steps, outputs, structure, preprocess)
-        output_value = outputs.get("final_answer")
+        output_value = outputs.get("final_answer", outputs.get("full_solution", outputs.get("final_solution")))
     elif workflow_type == "hotpotqa":
         trace_entry = _build_trace_hotpotqa(steps, outputs, structure, preprocess)
-        output_value = outputs.get("final_answer")
+        output_value = outputs.get("final_answer", outputs.get("full_solution", outputs.get("final_solution")))
     elif workflow_type == "livecodebench":
         trace_entry = _build_trace_livecodebench(steps, outputs, structure, preprocess)
         output_value = outputs.get("final_answer", outputs.get("full_solution", outputs.get("final_solution")))
@@ -241,6 +320,25 @@ async def run_dsl_query(
             "steps": steps,
         }
         output_value = outputs
+
+    # Hard guarantee: runtime must never return None as workflow output.
+    if output_value is None:
+        logger.error(
+            f"{workflow_type} workflow output resolved to None after normalization. "
+            "Returning empty string fallback."
+        )
+        output_value = ""
+        if isinstance(outputs, dict):
+            if _is_empty_output(outputs.get("final_answer")):
+                outputs["final_answer"] = output_value
+            if _is_empty_output(outputs.get("full_solution")):
+                outputs["full_solution"] = output_value
+            if _is_empty_output(outputs.get("final_solution")):
+                outputs["final_solution"] = output_value
+        if isinstance(trace_entry, dict):
+            for key in ("final_answer", "full_solution", "final_solution"):
+                if key in trace_entry and _is_empty_output(trace_entry.get(key)):
+                    trace_entry[key] = output_value
 
     # Write trace
     trace_file = output_dir / "trace.jsonl"

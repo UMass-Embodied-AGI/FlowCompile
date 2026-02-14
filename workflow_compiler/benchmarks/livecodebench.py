@@ -149,9 +149,29 @@ class LiveCodeBench(BaseBenchmark):
             raise exception_occurred[0]
         return result[0] if result else None
     def parse_code(self, prediction):
-        prediction = prediction.split("```python")[-1]
-        prediction = prediction.split("```")[0]
-        return prediction
+        """Extract code block while tolerating malformed/structured outputs."""
+        if prediction is None:
+            return ""
+        if isinstance(prediction, dict):
+            prediction = (
+                prediction.get("final_solution")
+                or prediction.get("solution")
+                or prediction.get("response")
+                or prediction.get("final_answer")
+                or prediction.get("full_solution")
+                or ""
+            )
+        elif not isinstance(prediction, str):
+            prediction = str(prediction)
+
+        text = prediction.strip()
+        if "```python" in text:
+            text = text.split("```python")[-1]
+        elif "```" in text:
+            text = text.split("```")[-1]
+        if "```" in text:
+            text = text.split("```")[0]
+        return text.strip()
     async def load_data(self, specific_indices: List[int] = None) -> List[dict]:
         """Load data from JSONL and convert to LiveCodeBench evaluation format."""
         start_time = time.time()

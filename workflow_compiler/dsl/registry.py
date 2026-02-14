@@ -70,10 +70,19 @@ def tool_ensure_nonempty(primary: list, fallback: list) -> list:
 
 
 def tool_first_nonempty(primary: list, fallback: list):
-    if primary:
-        return primary[0]
-    if fallback:
-        return fallback[0]
+    def _is_nonempty(value: Any) -> bool:
+        if value is None:
+            return False
+        if isinstance(value, str):
+            return bool(value.strip())
+        return True
+
+    for value in (primary or []):
+        if _is_nonempty(value):
+            return value
+    for value in (fallback or []):
+        if _is_nonempty(value):
+            return value
     return None
 
 
