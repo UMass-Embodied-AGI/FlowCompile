@@ -15,6 +15,7 @@ test_file: "data/math500_test.jsonl"
 # Required shared search space
 search_axes: ["model", "budget", "structure"]
 search_budgets: [10, 200, 400, 800, 1000, 1500, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 12000, 16000]
+min_samples_per_agent: 100
 
 # Test overrides
 test_parallel: 4
