@@ -27,8 +27,8 @@ class GSM8KBenchmark(MATHBenchmark):
     WORKFLOW_TYPE = "gsm8k"
     METRIC_NAME = "accuracy"
     DEFAULT_SPLIT_PATHS = {
-        "validate": "data/ours/gsm8k_validate.jsonl",
-        "test": "data/ours/gsm8k_test.jsonl",
+        "validate": "data/gsm8k_validate.jsonl",
+        "test": "data/gsm8k_test.jsonl",
     }
 
 

@@ -26,6 +26,7 @@ from workflow_compiler.runtime.knn import run_knn
 from workflow_compiler.runtime.knn_evaluate import run_knn_evaluate
 from workflow_compiler.core.analysis.prediction import parse_search_axes, parse_agent_constraints
 from workflow_compiler.benchmarks import get_benchmark_info
+from workflow_compiler.core.data_paths import resolve_existing_path
 
 
 FLAT_SCHEMA_VERSION = "flowcompile.flat.v1"
@@ -523,7 +524,8 @@ def _benchmark_name_for_workflow(workflow_type: Optional[str]) -> str:
 def _default_split_path_from_workflow(workflow_type: Optional[str], split: str) -> Optional[str]:
     benchmark_name = _benchmark_name_for_workflow(workflow_type)
     info = get_benchmark_info(benchmark_name)
-    return (info.get("default_split_paths") or {}).get(split)
+    path = (info.get("default_split_paths") or {}).get(split)
+    return resolve_existing_path(path) or path
 
 
 def cmd_compile_ground_truth(args, cfg):
@@ -550,6 +552,14 @@ def cmd_compile_ground_truth(args, cfg):
         or _cfg_flat_get(cfg, "validate_file")
         or gt.get("file_path")
     )
+    entry_point_file = (
+        _arg_get(args, "entry_point_file")
+        or _cfg_flat_get(cfg, "ground_truth_entry_point_file")
+        or _cfg_flat_get(cfg, "livecodebench_public_test_file")
+        or gt.get("entry_point_file")
+    )
+    file_path = resolve_existing_path(file_path) or file_path
+    entry_point_file = resolve_existing_path(entry_point_file) or entry_point_file
     debug = _arg_get(args, "debug", False) or _cfg_flat_get(cfg, "ground_truth_debug", False) or gt.get("debug", False)
 
     gt_args = SimpleNamespace(
@@ -578,6 +588,7 @@ def cmd_compile_ground_truth(args, cfg):
         experiment_id=experiment_id,
         debug=debug,
         file_path=file_path,
+        entry_point_file=entry_point_file,
     )
 
     asyncio.run(run_ground_truth(gt_args))
@@ -735,6 +746,19 @@ def cmd_compile_profile(args, cfg):
                 parsed_search_budgets.append(text)
         search_budgets = parsed_search_budgets
 
+    workflow_type = (
+        _cfg_flat_get(cfg, "workflow_type")
+        or _cfg_get(cfg, "compile", "workflow_type")
+        or ""
+    )
+    livecodebench_validate_file = None
+    livecodebench_public_test_file = None
+    if str(workflow_type).lower() == "livecodebench":
+        livecodebench_validate_file = _cfg_flat_get(cfg, "validate_file")
+        livecodebench_public_test_file = _cfg_flat_get(cfg, "livecodebench_public_test_file")
+        livecodebench_validate_file = resolve_existing_path(livecodebench_validate_file) or livecodebench_validate_file
+        livecodebench_public_test_file = resolve_existing_path(livecodebench_public_test_file) or livecodebench_public_test_file
+
     asyncio.run(
         run_profiling(
             experiment_id=experiment_id,
@@ -744,6 +768,8 @@ def cmd_compile_profile(args, cfg):
             max_concurrent=max_concurrent,
             debug=debug,
             min_samples_per_agent=min_samples,
+            livecodebench_validate_file=livecodebench_validate_file,
+            livecodebench_public_test_file=livecodebench_public_test_file,
         )
     )
     return 0
@@ -902,6 +928,10 @@ def cmd_test(args, cfg):
             data_path = _cfg_flat_get(cfg, "test_file")
         else:
             data_path = _cfg_flat_get(cfg, "validate_file")
+    entry_point_file = pick("entry_point_file", flat_key="test_entry_point_file")
+    if entry_point_file is None:
+        entry_point_file = _cfg_flat_get(cfg, "livecodebench_public_test_file")
+    entry_point_file = resolve_existing_path(entry_point_file) or entry_point_file
 
     ns = SimpleNamespace(
         experiment_id=experiment_id,
@@ -913,6 +943,7 @@ def cmd_test(args, cfg):
         split=split,
         dataset=dataset,
         data_path=data_path,
+        entry_point_file=entry_point_file,
         random_seed=pick("random_seed", _cfg_flat_get(cfg, "test_random_seed", 42), flat_key="test_random_seed"),
         start_idx=pick("start_idx", _cfg_flat_get(cfg, "test_start_idx", 0), flat_key="test_start_idx"),
         end_idx=pick("end_idx", flat_key="test_end_idx"),
@@ -1375,6 +1406,7 @@ def main():
     gt.add_argument("--reader-llm")
     gt.add_argument("--answer-reviewer-llm")
     gt.add_argument("--mcp-url")
+    gt.add_argument("--entry-point-file")
     gt.add_argument("--experiment-id")
     gt.add_argument("--file-path")
     gt.add_argument("--debug", action="store_true")
@@ -1432,6 +1464,7 @@ def main():
     tst.add_argument("--dataset")
     tst.add_argument("--split")
     tst.add_argument("--data-path")
+    tst.add_argument("--entry-point-file")
     tst.add_argument("--output-dir")
     tst.add_argument("--pareto-sample-n", type=int)
     tst.add_argument("--parallel", type=int, default=None)

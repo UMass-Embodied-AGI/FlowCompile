@@ -19,6 +19,7 @@ from workflow_compiler.compiler.validation import (
     _score_is_success,
     _result_score,
 )
+from workflow_compiler.core.data_paths import resolve_required_path
 
 # Import workflow classes and utilities from workflow_compiler
 from workflow_compiler.dsl.runtime import DslWorkflowRunner
@@ -84,11 +85,11 @@ async def run_ground_truth(args):
 
         # Default file paths differ between math, math500, and gsm8k
         if args.task == "math":
-            file_path = args.file_path or "data/ours/math_validate.jsonl"
+            file_path = resolve_required_path(args.file_path or "data/math_validate.jsonl", label="math validate file")
         elif args.task == "gsm8k":
-            file_path = args.file_path or "data/ours/gsm8k_validate.jsonl"
+            file_path = resolve_required_path(args.file_path or "data/gsm8k_validate.jsonl", label="gsm8k validate file")
         else:  # math500
-            file_path = args.file_path or "data/ours/math500_validate.jsonl"
+            file_path = resolve_required_path(args.file_path or "data/math500_validate.jsonl", label="math500 validate file")
         if args.debug:
             output_dir = profile_root / "debug_dsl_agent"
             logger.info("Debug mode: Using DSL debug output directory")
@@ -218,7 +219,7 @@ async def run_ground_truth(args):
             model, budget = parse_config(config)
             logger.info(f"  {agent_name}: model={model}, budget={budget}")
 
-        file_path = args.file_path or "data/ours/hotpotqa_validate.jsonl"
+        file_path = resolve_required_path(args.file_path or "data/hotpotqa_validate.jsonl", label="hotpotqa validate file")
         if args.debug:
             output_dir = profile_root / "debug_dsl_hotpotqa"
             timestamp = "debug"
@@ -325,8 +326,14 @@ async def run_ground_truth(args):
             model, budget = parse_config(config)
             logger.info(f"  {agent_name}: model={model}, budget={budget}")
 
-        file_path = args.file_path or "data/ours/livecodebench_validate.jsonl"
-        entry_point_file = "data/ours/livecodebench_public_test.jsonl"
+        file_path = resolve_required_path(
+            args.file_path or "data/livecodebench_validate.jsonl",
+            label="livecodebench validate file",
+        )
+        entry_point_file = resolve_required_path(
+            getattr(args, "entry_point_file", None) or "data/livecodebench_public_test.jsonl",
+            label="livecodebench entry_point_file",
+        )
         if args.debug:
             output_dir = profile_root / "debug_dsl_livecodebench"
             timestamp = "debug"

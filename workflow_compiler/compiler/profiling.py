@@ -61,6 +61,7 @@ from workflow_compiler.core.workflow.operators import run_code
 from workflow_compiler.core.llm.formatter import XmlFormatter
 from workflow_compiler.core.workflow.operators import ScEnsembleOp, AnswerGenerateOp
 from workflow_compiler.benchmarks.livecodebench import evaluate_generations_by_problem
+from workflow_compiler.core.data_paths import resolve_existing_path
 from concurrent.futures import ProcessPoolExecutor
 from workflow_compiler.workflows.dsl_registry import get_workflow_module
 
@@ -204,6 +205,8 @@ class BenchmarkConfig:
     SEARCH_BUDGETS = None
     AGENT_NAMES = None
     WORKFLOW_TYPE = None
+    LIVECODEBENCH_VALIDATE_PATH = "data/livecodebench_validate.jsonl"
+    LIVECODEBENCH_PUBLIC_TEST_PATH = "data/livecodebench_public_test.jsonl"
     
     @classmethod
     def initialize_from_experiment_id(
@@ -386,7 +389,10 @@ Judgment:""",
         try:
             # First, load entry_point mappings from public_test file
             entry_point_map = {}
-            public_test_path = Path("data/ours/livecodebench_public_test.jsonl")
+            public_test_path = Path(
+                resolve_existing_path(BenchmarkConfig.LIVECODEBENCH_PUBLIC_TEST_PATH)
+                or BenchmarkConfig.LIVECODEBENCH_PUBLIC_TEST_PATH
+            )
             if public_test_path.exists():
                 print(f"Loading entry_point mappings from {public_test_path}...")
                 with open(public_test_path, 'r', encoding='utf-8') as f:
@@ -404,7 +410,10 @@ Judgment:""",
                 print(f"Warning: entry_point file not found: {public_test_path}")
             
             # Now load test cases from validate file
-            test_data_path = Path("data/ours/livecodebench_validate.jsonl")
+            test_data_path = Path(
+                resolve_existing_path(BenchmarkConfig.LIVECODEBENCH_VALIDATE_PATH)
+                or BenchmarkConfig.LIVECODEBENCH_VALIDATE_PATH
+            )
             if not test_data_path.exists():
                 print(f"Warning: LiveCodeBench test data file not found: {test_data_path}")
                 return
@@ -1433,6 +1442,8 @@ async def run_profiling(
     max_concurrent: int = 128,
     debug: bool = False,
     min_samples_per_agent: Optional[int] = 100,
+    livecodebench_validate_file: Optional[str] = None,
+    livecodebench_public_test_file: Optional[str] = None,
 ) -> Path:
     """Run reasoning-budget profiling for an experiment."""
     BenchmarkConfig.initialize_from_experiment_id(
@@ -1460,6 +1471,14 @@ async def run_profiling(
     if min_samples_per_agent:
         BenchmarkConfig.MIN_SAMPLES_PER_AGENT = min_samples_per_agent
         print(f"Override: MIN_SAMPLES_PER_AGENT = {BenchmarkConfig.MIN_SAMPLES_PER_AGENT}")
+
+    if livecodebench_validate_file:
+        BenchmarkConfig.LIVECODEBENCH_VALIDATE_PATH = str(livecodebench_validate_file)
+        print(f"Override: LIVECODEBENCH_VALIDATE_PATH = {BenchmarkConfig.LIVECODEBENCH_VALIDATE_PATH}")
+
+    if livecodebench_public_test_file:
+        BenchmarkConfig.LIVECODEBENCH_PUBLIC_TEST_PATH = str(livecodebench_public_test_file)
+        print(f"Override: LIVECODEBENCH_PUBLIC_TEST_PATH = {BenchmarkConfig.LIVECODEBENCH_PUBLIC_TEST_PATH}")
 
     runner = BenchmarkRunner()
     await runner.run_benchmark()

@@ -19,6 +19,7 @@ from workflow_compiler.dsl.structures import apply_structure
 from workflow_compiler.workflows.dsl_registry import get_workflow_module
 from workflow_compiler.benchmarks import get_benchmark, get_benchmark_info
 from workflow_compiler.core.logs import logger
+from workflow_compiler.core.data_paths import resolve_existing_path
 
 _LEGACY_TRACE_FIELDS = {
     "is_correct",
@@ -45,7 +46,8 @@ def _resolve_benchmark(dataset: str) -> Dict[str, Any]:
 def _default_data_path(dataset: str, split: str) -> Optional[str]:
     info = _resolve_benchmark(dataset)
     defaults = info.get("default_split_paths") or {}
-    return defaults.get(split)
+    path = defaults.get(split)
+    return resolve_existing_path(path) or path
 
 
 def _dataset_to_workflow_type(dataset: str) -> str:
@@ -458,6 +460,7 @@ async def evaluate_configuration(
     split: str = "validate",
     dataset: str = "MATH",
     data_path: Optional[str] = None,
+    entry_point_file: Optional[str] = None,
     max_tasks: int = 16,  # Maximum concurrent tasks for evaluation
 ) -> Dict[str, Any]:
     """
@@ -533,14 +536,24 @@ async def evaluate_configuration(
             structure_id=structure_id,
         )
 
-        file_path = data_path or _default_data_path(dataset, split)
+        file_path = resolve_existing_path(data_path) if data_path else None
+        if not file_path:
+            file_path = _default_data_path(dataset, split)
         if not file_path:
             raise ValueError(
                 f"No data_path provided and benchmark '{benchmark_info['canonical_dataset_name']}' "
                 f"has no DEFAULT_SPLIT_PATHS entry for split='{split}'."
             )
+        if not Path(file_path).exists():
+            raise FileNotFoundError(f"Data file not found: {file_path}")
 
         benchmark_kwargs = dict(benchmark_info.get("default_init_kwargs", {}) or {})
+        workflow_type_name_norm = str(workflow_type_name or "").lower()
+        if workflow_type_name_norm == "livecodebench" and entry_point_file:
+            benchmark_kwargs["entry_point_file"] = entry_point_file
+        for key, value in list(benchmark_kwargs.items()):
+            if isinstance(value, str) and key.endswith("_file"):
+                benchmark_kwargs[key] = resolve_existing_path(value) or value
         benchmark = get_benchmark(
             dataset,
             name=benchmark_info["canonical_dataset_name"],
@@ -796,6 +809,7 @@ async def run_validation(args):
                     args.split,
                     args.dataset,
                     args.data_path,
+                    getattr(args, "entry_point_file", None),
                     args.max_tasks,
                 )
                 evaluated_count += 1
@@ -836,6 +850,7 @@ async def run_validation(args):
                     args.split,
                     args.dataset,
                     args.data_path,
+                    getattr(args, "entry_point_file", None),
                     args.max_tasks,
                 )
                 return result, False

@@ -17,8 +17,8 @@ class HotpotQABenchmark(BaseBenchmark):
     WORKFLOW_TYPE = "hotpotqa"
     METRIC_NAME = "f1"
     DEFAULT_SPLIT_PATHS = {
-        "validate": "data/ours/hotpotqa_validate.jsonl",
-        "test": "data/ours/hotpotqa_test.jsonl",
+        "validate": "data/hotpotqa_validate.jsonl",
+        "test": "data/hotpotqa_test.jsonl",
     }
 
     def __init__(self, name: str, file_path: str, log_path: str):

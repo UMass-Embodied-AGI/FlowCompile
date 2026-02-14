@@ -21,20 +21,20 @@ from workflow_compiler.routers.utils import (
 def _default_data_files(workflow_type: str) -> Optional[List[str]]:
     data_map = {
         "math": [
-            "data/ours/math_test.jsonl",
-            "data/ours/math_validate.jsonl",
+            "data/math_test.jsonl",
+            "data/math_validate.jsonl",
         ],
         "gsm8k": [
-            "data/ours/gsm8k_test.jsonl",
-            "data/ours/gsm8k_validate.jsonl",
+            "data/gsm8k_test.jsonl",
+            "data/gsm8k_validate.jsonl",
         ],
         "hotpotqa": [
-            "data/ours/hotpotqa_test.jsonl",
-            "data/ours/hotpotqa_validate.jsonl",
+            "data/hotpotqa_test.jsonl",
+            "data/hotpotqa_validate.jsonl",
         ],
         "livecodebench": [
-            "data/ours/livecodebench_test.jsonl",
-            "data/ours/livecodebench_validate.jsonl",
+            "data/livecodebench_test.jsonl",
+            "data/livecodebench_validate.jsonl",
         ],
     }
     return data_map.get(workflow_type)

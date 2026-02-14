@@ -20,6 +20,7 @@ from tqdm import tqdm
 from workflow_compiler.benchmarks.benchmark import BaseBenchmark
 from workflow_compiler.benchmarks.registry import register_benchmark
 from workflow_compiler.core.logs import logger
+from workflow_compiler.core.data_paths import resolve_existing_path
 import sys
 sys.path.append("..")
 sys.path.append("benchmarks")
@@ -104,19 +105,21 @@ class LiveCodeBench(BaseBenchmark):
     WORKFLOW_TYPE = "livecodebench"
     METRIC_NAME = "pass_at_1"
     DEFAULT_SPLIT_PATHS = {
-        "validate": "data/ours/livecodebench_validate.jsonl",
-        "test": "data/ours/livecodebench_test.jsonl",
+        "validate": "data/livecodebench_validate.jsonl",
+        "test": "data/livecodebench_test.jsonl",
     }
     DEFAULT_INIT_KWARGS = {
         "timeout": 6,
-        "entry_point_file": "data/ours/livecodebench_public_test.jsonl",
+        "entry_point_file": "data/livecodebench_public_test.jsonl",
     }
 
     def __init__(self, name: str, file_path: str, log_path: str, timeout: int = 6, entry_point_file: str = None):
-        super().__init__(name, file_path, log_path)
+        resolved_file_path = resolve_existing_path(file_path) or file_path
+        resolved_entry_path = resolve_existing_path(entry_point_file) if entry_point_file else None
+        super().__init__(name, resolved_file_path, log_path)
         self.timeout = timeout
         self.num_process_evaluate = min(16, os.cpu_count() or 4)
-        self.entry_point_file = entry_point_file
+        self.entry_point_file = resolved_entry_path
         self.entry_point_map = None  # Will be loaded lazily
 
     class TimeoutError(Exception):
@@ -184,11 +187,14 @@ class LiveCodeBench(BaseBenchmark):
         # Load entry_point mapping from public_test file if provided
         if self.entry_point_file and self.entry_point_map is None:
             self.entry_point_map = {}
-            async with aiofiles.open(self.entry_point_file, mode="r", encoding="utf-8") as file:
-                async for line in file:
-                    entry_data = json.loads(line)
-                    self.entry_point_map[entry_data["question_id"]] = entry_data["entry_point"]
-            logger.info(f"Loaded {len(self.entry_point_map)} entry points from {self.entry_point_file}")
+            if os.path.exists(self.entry_point_file):
+                async with aiofiles.open(self.entry_point_file, mode="r", encoding="utf-8") as file:
+                    async for line in file:
+                        entry_data = json.loads(line)
+                        self.entry_point_map[entry_data["question_id"]] = entry_data["entry_point"]
+                logger.info(f"Loaded {len(self.entry_point_map)} entry points from {self.entry_point_file}")
+            else:
+                logger.warning(f"Entry-point file not found: {self.entry_point_file}. Continuing without preloaded entry points.")
         
         raw_data = []
         async with aiofiles.open(self.file_path, mode="r", encoding="utf-8") as file:

@@ -23,8 +23,8 @@ class MATHBenchmark(BaseBenchmark):
     WORKFLOW_TYPE = "math"
     METRIC_NAME = "accuracy"
     DEFAULT_SPLIT_PATHS = {
-        "validate": "data/ours/math_validate.jsonl",
-        "test": "data/ours/math_test.jsonl",
+        "validate": "data/math_validate.jsonl",
+        "test": "data/math_test.jsonl",
     }
 
     def __init__(self, name: str, file_path: str, log_path: str):

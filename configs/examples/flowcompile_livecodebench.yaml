@@ -11,6 +11,7 @@ agent_dataset_model: "gpt-5"
 # Canonical split files
 validate_file: "data/livecodebench_validate.jsonl"
 test_file: "data/livecodebench_test.jsonl"
+livecodebench_public_test_file: "data/livecodebench_public_test.jsonl"
 
 # Required shared search space
 search_axes: ["model", "budget", "structure"]

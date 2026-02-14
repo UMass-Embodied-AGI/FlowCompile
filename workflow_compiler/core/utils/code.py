@@ -2,6 +2,7 @@ import re
 import json
 from enum import Enum
 from typing import Any, List, Tuple, Union
+from workflow_compiler.core.data_paths import resolve_existing_path
 
 
 class CodeDataset(Enum):
@@ -17,7 +18,7 @@ def extract_test_cases_from_jsonl(entry_point: str, dataset: Union[CodeDataset, 
     file_map = {
         CodeDataset.HUMAN_EVAL.value: "data/datasets/humaneval_public_test.jsonl",
         CodeDataset.MBPP.value: "data/datasets/mbpp_public_test.jsonl",
-        CodeDataset.LIVE_CODE_BENCH.value: "data/ours/livecodebench_public_test.jsonl",
+        CodeDataset.LIVE_CODE_BENCH.value: "data/livecodebench_public_test.jsonl",
     }
     hardcoded_cases_map = {
         CodeDataset.HUMAN_EVAL.value: {
@@ -54,7 +55,8 @@ def extract_test_cases_from_jsonl(entry_point: str, dataset: Union[CodeDataset, 
 
     # 统一文件读取逻辑
     key = "question_id" if dataset_value == CodeDataset.LIVE_CODE_BENCH.value else "entry_point"
-    with open(file_path, "r") as file:
+    resolved_path = resolve_existing_path(file_path) or file_path
+    with open(resolved_path, "r") as file:
         for line in file:
             data = json.loads(line)
             if data.get(key) == entry_point:

@@ -432,6 +432,7 @@ class Test(Operator):
     def _load_all_test_cases(self):
         """Load all test cases from dataset files once during initialization"""
         from workflow_compiler.core.utils.code import CodeDataset
+        from workflow_compiler.core.data_paths import resolve_existing_path
         import json
         import os
         
@@ -439,25 +440,26 @@ class Test(Operator):
         file_map = {
             CodeDataset.HUMAN_EVAL.value: "data/datasets/humaneval_public_test.jsonl",
             CodeDataset.MBPP.value: "data/datasets/mbpp_public_test.jsonl",
-            CodeDataset.LIVE_CODE_BENCH.value: "data/ours/livecodebench_public_test.jsonl",
+            CodeDataset.LIVE_CODE_BENCH.value: "data/livecodebench_public_test.jsonl",
         }
         
         for dataset_name, file_path in file_map.items():
             cache[dataset_name] = {}
-            if not os.path.exists(file_path):
+            resolved_file_path = resolve_existing_path(file_path) or file_path
+            if not os.path.exists(resolved_file_path):
                 logger.warning(f"Test case file not found: {file_path}")
                 continue
                 
             try:
                 key_field = "question_id" if dataset_name == CodeDataset.LIVE_CODE_BENCH.value else "entry_point"
-                with open(file_path, "r") as f:
+                with open(resolved_file_path, "r") as f:
                     for line in f:
                         data = json.loads(line)
                         key = data.get(key_field)
                         if key:
                             cache[dataset_name][key] = data.get("test")
             except Exception as e:
-                logger.error(f"Error loading test cases from {file_path}: {e}")
+                logger.error(f"Error loading test cases from {resolved_file_path}: {e}")
         
         return cache
     
