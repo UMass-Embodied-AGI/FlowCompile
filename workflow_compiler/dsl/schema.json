@@ -1,0 +1,74 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "FlowCompile Workflow DSL",
+  "type": "object",
+  "required": ["version", "name", "nodes", "edges"],
+  "properties": {
+    "version": {"type": "string"},
+    "name": {"type": "string"},
+    "entry": {"type": ["string", "null"]},
+    "description": {"type": "string"},
+    "metadata": {"type": "object"},
+    "outputs": {"type": "object"},
+    "nodes": {
+      "type": "array",
+      "items": {"$ref": "#/definitions/node"}
+    },
+    "edges": {
+      "type": "array",
+      "items": {"$ref": "#/definitions/edge"}
+    }
+  },
+  "definitions": {
+    "node": {
+      "type": "object",
+      "required": ["id", "type", "name"],
+      "properties": {
+        "id": {"type": "string"},
+        "type": {"type": "string", "enum": ["agent", "tool", "router", "ensemble", "formatter", "end"]},
+        "name": {"type": "string"},
+        "prompt": {"type": "string"},
+        "prompt_ref": {"type": "string"},
+        "llm_ref": {"type": "string"},
+        "impl": {"type": "string"},
+        "llm": {"$ref": "#/definitions/llm"},
+        "io": {"type": "object"},
+        "metadata": {"type": "object"},
+        "logging": {"type": "object"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"type": {"const": "agent"}}},
+          "then": {
+            "required": ["llm"],
+            "anyOf": [
+              {"required": ["prompt"]},
+              {"required": ["prompt_ref"]}
+            ]
+          }
+        }
+      ]
+    },
+    "llm": {
+      "type": "object",
+      "required": ["model"],
+      "properties": {
+        "model": {"type": "string"},
+        "temperature": {"type": "number"},
+        "top_p": {"type": "number"},
+        "max_tokens": {"type": "integer"},
+        "reasoning_budget": {"type": ["integer", "string", "null"]}
+      }
+    },
+    "edge": {
+      "type": "object",
+      "required": ["from", "to"],
+      "properties": {
+        "from": {"type": "string"},
+        "to": {"type": "string"},
+        "when": {"type": "object"},
+        "max_visits": {"type": "integer"}
+      }
+    }
+  }
+}

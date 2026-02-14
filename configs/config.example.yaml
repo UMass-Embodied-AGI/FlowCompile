@@ -1,0 +1,18 @@
+# Example model configuration for FlowCompile
+# Copy to configs/config.yaml and replace placeholders with real values.
+
+models:
+  gpt-5-mini:
+    api_type: "azure"
+    azure_endpoint: "https://YOUR_AZURE_ENDPOINT"
+    azure_deployment: "gpt-5-mini-2024-07-18"
+    api_key: "YOUR_AZURE_API_KEY"
+    api_version: "2024-10-21"
+
+  # Example local OpenAI-compatible endpoint (optional)
+  local-llm:
+    api_type: "openai"
+    base_url: "http://127.0.0.1:4000"
+    api_key: "YOUR_PROXY_KEY"
+    hf_model_name: "Qwen/Qwen3-4B"
+    enable_thinking_budget: true
