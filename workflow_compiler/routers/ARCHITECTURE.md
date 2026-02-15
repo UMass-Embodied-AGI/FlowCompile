@@ -16,5 +16,5 @@ FlowCompile uses a single router implementation: `knn`.
 
 ## Runtime Integration
 
-- `workflow_compiler/runtime/router.py` builds `knn` routers for runtime selection.
-- `workflow_compiler/runtime/knn.py` runs batch KNN routing and output generation.
+- Runtime selection + execution is exposed via `flowcompile runtime infer`.
+- Router-specific runtime modules were removed from `workflow_compiler/runtime/`.

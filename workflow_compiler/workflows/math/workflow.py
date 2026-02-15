@@ -15,7 +15,7 @@ class MathWorkflowDSL(WorkflowModule):
         self.refine_solver = AgentNode("refine_solver")
         self.detailed_solver = AgentNode("detailed_solver")
         self.generate_solver = AgentNode("generate_solver")
-        self.sc_ensemble = AgentNode("sc_ensemble")
+        self.sc_ensemble = AgentNode("sc_ensemble", min_input_branches=2)
         self.extract_answer = ToolNode("extract_answer", impl="extract_math_answer")
 
     def forward(self, query: Dict[str, Any]):

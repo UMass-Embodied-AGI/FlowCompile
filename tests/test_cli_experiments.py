@@ -197,10 +197,48 @@ def test_experiments_correlation_rejects_noncanonical_latency_override(monkeypat
         "analysis-pipeline",
     ],
 )
-def test_cli_main_parser_rejects_removed_experiment_names(monkeypatch, name):
+def test_cli_main_parser_rejects_removed_experiment_names(monkeypatch, capsys, name):
     monkeypatch.setattr("sys.argv", ["flowcompile", "experiments", name])
-    with pytest.raises(SystemExit, match="invalid choice"):
+    with pytest.raises(SystemExit) as excinfo:
         cli.main()
+    assert excinfo.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("name", ["select", "knn", "knn-evaluate"])
+def test_cli_main_parser_rejects_removed_runtime_commands(monkeypatch, capsys, name):
+    monkeypatch.setattr("sys.argv", ["flowcompile", "runtime", name])
+    with pytest.raises(SystemExit) as excinfo:
+        cli.main()
+    assert excinfo.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err
+
+
+def test_cli_main_runtime_infer_dispatch(monkeypatch):
+    captured = {}
+
+    def fake_runtime_infer(args, cfg):
+        captured["args"] = args
+        captured["cfg"] = cfg
+        return 0
+
+    monkeypatch.setattr(cli, "cmd_runtime_infer", fake_runtime_infer)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "flowcompile",
+            "runtime",
+            "infer",
+            "--compiled",
+            "compiled.json",
+            "--workflow-type",
+            "math",
+            "--query",
+            "Solve 1+1",
+        ],
+    )
+    assert cli.main() == 0
+    assert captured["args"].query == "Solve 1+1"
 
 
 def test_correlation_module_import_smoke():

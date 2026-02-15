@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import importlib
 import sys
 import textwrap
@@ -16,7 +15,6 @@ from workflow_compiler.benchmarks import (
 )
 from workflow_compiler.benchmarks import registry as benchmark_registry
 from workflow_compiler.compiler.validation import _dataset_to_workflow_type, _metric_for_dataset
-from workflow_compiler.runtime.knn_evaluate import init_benchmark_for_dataset
 
 
 @pytest.fixture()
@@ -102,7 +100,7 @@ def test_validation_uses_registry_for_aliases():
     assert _metric_for_dataset("math500") == "accuracy"
 
 
-def test_registry_auto_discovers_temp_module_and_knn_uses_it(tmp_path: Path, registry_state_guard):
+def test_registry_auto_discovers_temp_module_and_can_instantiate(tmp_path: Path, registry_state_guard):
     module_name = "temp_registry_benchmark_module"
     package, package_path = _install_temp_benchmark_module(tmp_path, module_name)
 
@@ -122,16 +120,6 @@ def test_registry_auto_discovers_temp_module_and_knn_uses_it(tmp_path: Path, reg
             log_path=str(tmp_path),
         )
         assert benchmark.BENCHMARK_NAME == "TempRegistryBenchmark"
-
-        runtime_benchmark, runtime_info = asyncio.run(
-            init_benchmark_for_dataset(
-                "tempreg",
-                dataset_path=str(tmp_path / "dummy.jsonl"),
-                output_dir=tmp_path,
-            )
-        )
-        assert runtime_info["name"] == "TempRegistryBenchmark"
-        assert runtime_benchmark.BENCHMARK_NAME == "TempRegistryBenchmark"
     finally:
         if package_path in package.__path__:
             package.__path__.remove(package_path)

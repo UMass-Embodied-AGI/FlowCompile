@@ -512,7 +512,7 @@ class AsyncLLM:
 
     async def aclose(self):
         """Close underlying async client to release HTTP sessions/sockets"""
-        close_method = getattr(self.aclient, "close", None)
+        close_method = getattr(self.aclient, "aclose", None) or getattr(self.aclient, "close", None)
         if close_method:
             try:
                 maybe_coro = close_method()

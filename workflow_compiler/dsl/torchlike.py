@@ -158,6 +158,7 @@ class Node:
         prompt: Optional[str] = None,
         prompt_ref: Optional[str] = None,
         impl: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.name = name
         self.node_type = node_type
@@ -165,6 +166,7 @@ class Node:
         self.prompt = prompt
         self.prompt_ref = prompt_ref
         self.impl = impl
+        self.metadata = dict(metadata) if metadata else None
 
     def __call__(self, **kwargs) -> NodeOutput:
         ctx = CaptureContext.current()
@@ -174,8 +176,26 @@ class Node:
 
 
 class AgentNode(Node):
-    def __init__(self, name: str, llm: Optional[str] = None, prompt: Optional[str] = None, prompt_ref: Optional[str] = None):
-        super().__init__(name=name, node_type="agent", llm=llm, prompt=prompt, prompt_ref=prompt_ref)
+    def __init__(
+        self,
+        name: str,
+        llm: Optional[str] = None,
+        prompt: Optional[str] = None,
+        prompt_ref: Optional[str] = None,
+        min_input_branches: int = 1,
+    ):
+        branches = int(min_input_branches)
+        if branches < 1:
+            raise ValueError("AgentNode min_input_branches must be >= 1")
+        metadata = {"min_input_branches": branches} if branches > 1 else None
+        super().__init__(
+            name=name,
+            node_type="agent",
+            llm=llm,
+            prompt=prompt,
+            prompt_ref=prompt_ref,
+            metadata=metadata,
+        )
 
 
 class ToolNode(Node):
@@ -250,7 +270,7 @@ class CaptureContext:
         self.calls.append(call)
 
         if call_id not in self.nodes:
-            self.nodes[call_id] = {
+            node_spec: Dict[str, Any] = {
                 "id": call_id,
                 "type": node.node_type,
                 "name": node.name,
@@ -260,6 +280,9 @@ class CaptureContext:
                 "impl": node.impl,
                 "io": {"inputs": self._serialize_inputs(inputs)},
             }
+            if node.metadata:
+                node_spec["metadata"] = copy.deepcopy(node.metadata)
+            self.nodes[call_id] = node_spec
 
         if self.last_call_id is not None:
             edge: Dict[str, Any] = {"from": self.last_call_id, "to": call_id}

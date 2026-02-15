@@ -379,6 +379,15 @@ Judgment:""",
         self.judge_llm = create_llm_instance(judge_model)
         self.livecodebench_test_cache = {}  # Cache for LiveCodeBench test cases
         self._load_livecodebench_test_cache()
+
+    async def aclose(self):
+        """Close judge LLM client."""
+        close_method = getattr(self.judge_llm, "aclose", None)
+        if close_method:
+            try:
+                await close_method()
+            except Exception:
+                pass
     
     def _load_livecodebench_test_cache(self):
         """
@@ -909,6 +918,17 @@ class AgentBenchmarker:
         self.agent_name = agent_name
         self.judge = judge
         self.llm_cache = {}  # Cache LLM instances
+
+    async def aclose(self):
+        """Close cached model clients."""
+        for llm in list(self.llm_cache.values()):
+            close_method = getattr(llm, "aclose", None)
+            if close_method:
+                try:
+                    await close_method()
+                except Exception:
+                    pass
+        self.llm_cache.clear()
     
     def _get_llm(self, model_name: str) -> AsyncLLM:
         """Get or create LLM instance (with caching)"""
@@ -1055,6 +1075,25 @@ class BenchmarkRunner:
         self.judge = JudgeEvaluator()
         self.training_data = None
         self.results = {}
+        self.benchmarkers = []
+
+    async def aclose(self):
+        """Close all cached LLM clients used during profiling."""
+        for benchmarker in list(self.benchmarkers):
+            close_method = getattr(benchmarker, "aclose", None)
+            if close_method:
+                try:
+                    await close_method()
+                except Exception:
+                    pass
+        self.benchmarkers.clear()
+
+        close_method = getattr(self.judge, "aclose", None)
+        if close_method:
+            try:
+                await close_method()
+            except Exception:
+                pass
     
     def load_training_data(self) -> Dict[str, List[Dict]]:
         """
@@ -1189,6 +1228,7 @@ class BenchmarkRunner:
             
             samples = agent_samples[agent_name]
             benchmarker = AgentBenchmarker(agent_name, self.judge)
+            self.benchmarkers.append(benchmarker)
             
             for model_name in BenchmarkConfig.MODELS:
                 budgets = benchmarker._get_thinking_budgets(model_name)
@@ -1481,7 +1521,12 @@ async def run_profiling(
         print(f"Override: LIVECODEBENCH_PUBLIC_TEST_PATH = {BenchmarkConfig.LIVECODEBENCH_PUBLIC_TEST_PATH}")
 
     runner = BenchmarkRunner()
-    await runner.run_benchmark()
-    output_dir = runner.save_results()
-    print(f"\nBenchmark complete! Results saved to: {output_dir}")
-    return output_dir
+    try:
+        await runner.run_benchmark()
+        output_dir = runner.save_results()
+        print(f"\nBenchmark complete! Results saved to: {output_dir}")
+        return output_dir
+    finally:
+        close_method = getattr(runner, "aclose", None)
+        if close_method:
+            await close_method()

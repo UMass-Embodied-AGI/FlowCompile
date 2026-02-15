@@ -118,31 +118,37 @@ def _remove_nodes(spec: Dict[str, Any], remove_ids: set) -> Dict[str, Any]:
                 break
 
     # Rewrite refs in node inputs and outputs
-    def rewrite_ref(obj: Any) -> Any:
+    def rewrite_ref(obj: Any, in_list: bool = False) -> Any:
         if isinstance(obj, dict) and "ref" in obj:
             ref = obj.get("ref")
             if ref and ref.startswith("state."):
                 node_id = ref.split(".")[1]
+                if node_id in remove_ids:
+                    if in_list:
+                        return None
+                    if node_id in replacement:
+                        return {"ref": ref.replace(f"state.{node_id}", f"state.{replacement[node_id]}")}
+                    return obj  # keep as-is
                 if node_id in replacement:
                     return {"ref": ref.replace(f"state.{node_id}", f"state.{replacement[node_id]}")}
-                if node_id in remove_ids:
-                    return obj  # keep as-is
             return obj
         if isinstance(obj, list):
             out = []
+            seen_refs = set()
             for v in obj:
-                rv = rewrite_ref(v)
-                # drop refs to removed nodes inside lists
+                rv = rewrite_ref(v, in_list=True)
+                if rv is None:
+                    continue
                 if isinstance(rv, dict) and "ref" in rv:
                     ref = rv.get("ref")
-                    if ref and ref.startswith("state."):
-                        node_id = ref.split(".")[1]
-                        if node_id in remove_ids and node_id not in replacement:
-                            continue
+                    if isinstance(ref, str) and ref in seen_refs:
+                        continue
+                    if isinstance(ref, str):
+                        seen_refs.add(ref)
                 out.append(rv)
             return out
         if isinstance(obj, dict):
-            return {k: rewrite_ref(v) for k, v in obj.items()}
+            return {k: rewrite_ref(v, in_list=False) for k, v in obj.items()}
         return obj
 
     for node in nodes:

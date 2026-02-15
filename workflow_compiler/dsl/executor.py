@@ -126,6 +126,18 @@ class DslExecutor:
         self._agent_instances[name] = agent
         return agent
 
+    async def aclose(self) -> None:
+        """Close all cached agent LLM clients."""
+        for agent in list(self._agent_instances.values()):
+            llm = getattr(agent, "llm", None)
+            close_method = getattr(llm, "aclose", None) if llm is not None else None
+            if close_method:
+                try:
+                    await close_method()
+                except Exception:
+                    pass
+        self._agent_instances.clear()
+
     async def run(self, inputs: Dict[str, Any]) -> Tuple[Dict[str, Any], List[Dict[str, Any]], Dict[str, Any]]:
         state: Dict[str, Any] = {}
         steps: List[Dict[str, Any]] = []

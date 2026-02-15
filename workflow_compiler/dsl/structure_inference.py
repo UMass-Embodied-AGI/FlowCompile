@@ -55,6 +55,18 @@ def _collect_list_state_ref_groups(obj: Any, groups: List[List[str]]) -> List[st
     return []
 
 
+def _node_min_input_branches(node: Dict[str, Any]) -> int:
+    metadata = node.get("metadata")
+    if not isinstance(metadata, dict):
+        return 1
+    raw_value = metadata.get("min_input_branches", 1)
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        return 1
+    return max(1, value)
+
+
 def _spec_is_valid(spec: Dict[str, Any]) -> bool:
     nodes = spec.get("nodes", []) or []
     node_ids = {n.get("id") for n in nodes if n.get("id")}
@@ -123,7 +135,7 @@ def _estimate_total_branches(
         groups: List[List[str]] = []
         _collect_list_state_ref_groups(inputs, groups)
         for group in groups:
-            active_count = sum(1 for ref in group if ref in active_agent_ids and ref in all_agent_ids)
+            active_count = len({ref for ref in group if ref in active_agent_ids and ref in all_agent_ids})
             if active_count > largest_group:
                 largest_group = active_count
 
@@ -200,7 +212,7 @@ def infer_structures(
             groups: List[List[str]] = []
             _collect_list_state_ref_groups(inputs, groups)
             for group in groups:
-                active_refs = [ref for ref in group if ref in active_agent_ids and ref in all_agent_ids]
+                active_refs = {ref for ref in group if ref in active_agent_ids and ref in all_agent_ids}
                 if len(active_refs) > 1:
                     invalid_removed_consumer = True
                     break
@@ -221,12 +233,16 @@ def infer_structures(
                 continue
             groups: List[List[str]] = []
             _collect_list_state_ref_groups(inputs, groups)
+            required_branches = _node_min_input_branches(node)
             for group in groups:
-                agent_refs = [ref for ref in group if ref in all_agent_ids]
+                agent_refs = {ref for ref in group if ref in all_agent_ids}
                 if not agent_refs:
                     continue
-                active_refs = [ref for ref in agent_refs if ref in active_agent_ids]
+                active_refs = {ref for ref in agent_refs if ref in active_agent_ids}
                 if not active_refs:
+                    invalid_active_consumer = True
+                    break
+                if len(active_refs) < required_branches:
                     invalid_active_consumer = True
                     break
             if invalid_active_consumer:

@@ -19,11 +19,7 @@ from workflow_compiler.compiler.ground_truth import run_ground_truth
 from workflow_compiler.compiler.agent_dataset import run_agent_dataset
 from workflow_compiler.compiler.profiling import run_profiling
 from workflow_compiler.compiler.validation import run_validation
-from workflow_compiler.runtime.selector import select_config
-from workflow_compiler.runtime.engine import run_batch_sync
-from workflow_compiler.runtime.router import build_knn_router, route_query
-from workflow_compiler.runtime.knn import run_knn
-from workflow_compiler.runtime.knn_evaluate import run_knn_evaluate
+from workflow_compiler.runtime.infer import infer_runtime, infer_runtime_batch
 from workflow_compiler.core.analysis.prediction import parse_search_axes, parse_agent_constraints
 from workflow_compiler.benchmarks import get_benchmark_info
 from workflow_compiler.core.data_paths import resolve_existing_path
@@ -386,7 +382,6 @@ def _experiment_id_from_cfg(cfg: Dict[str, Any], fallback: Optional[str] = None)
         or
         _cfg_get(cfg, "compile", "experiment_id")
         or _cfg_get(cfg, "test", "experiment_id")
-        or _cfg_get(cfg, "runtime", "knn", "experiment_id")
         or fallback
     )
 
@@ -727,7 +722,11 @@ def cmd_compile_profile(args, cfg):
     debug = _arg_get(args, "debug", False) or _cfg_flat_get(cfg, "profile_debug", prof.get("debug", False))
     min_samples = _arg_get(args, "min_samples_per_agent")
     if min_samples is None:
-        min_samples = _cfg_flat_get(cfg, "profile_min_samples_per_agent", prof.get("min_samples_per_agent", 100))
+        min_samples = _cfg_flat_get(cfg, "profile_min_samples_per_agent")
+    if min_samples is None:
+        min_samples = _cfg_flat_get(cfg, "min_samples_per_agent")
+    if min_samples is None:
+        min_samples = prof.get("min_samples_per_agent", 100)
     raw_search_budgets = _arg_get(args, "search_budgets")
     if raw_search_budgets is None:
         raw_search_budgets = _cfg_flat_get(cfg, "search_budgets")
@@ -960,107 +959,6 @@ def cmd_test(args, cfg):
     return asyncio.run(run_validation(ns))
 
 
-def cmd_runtime_select(args, cfg):
-    runtime_cfg = _cfg_get(cfg, "runtime", default={})
-    experiment_id = _experiment_id_from_cfg(cfg)
-    root = _exp_root(experiment_id) if experiment_id else None
-    workflow_type = (
-        args.workflow_type
-        or _cfg_flat_get(cfg, "runtime_workflow_type")
-        or runtime_cfg.get("workflow_type")
-        or _cfg_flat_get(cfg, "workflow_type")
-        or _cfg_get(cfg, "compile", "workflow_type")
-    )
-    compiled = args.compiled or _cfg_flat_get(cfg, "runtime_compiled_configs") or runtime_cfg.get("compiled_configs")
-    if compiled is None and root is not None:
-        compiled = _resolve_required_input_path(
-            "compiled",
-            explicit_value=None,
-            canonical_path=str(root / "02_compile" / "compiled_configs.json"),
-            detect_patterns=[str(root / "compiled" / "compiled_configs.json")],
-        )
-    queries_path = (
-        args.queries
-        or _cfg_flat_get(cfg, "runtime_queries")
-        or runtime_cfg.get("queries")
-        or _cfg_flat_get(cfg, "validate_file")
-    )
-    if queries_path is None:
-        queries_path = _default_split_path_from_workflow(workflow_type, split="validate")
-
-    output_path = args.output or _cfg_flat_get(cfg, "runtime_output") or runtime_cfg.get("output")
-    if output_path is None:
-        output_path = str(root / "runtime" / "selection.jsonl") if root is not None else "runtime_selection.jsonl"
-    strategy = args.strategy or _cfg_flat_get(cfg, "runtime_strategy") or runtime_cfg.get("strategy", "preference")
-    alpha = args.alpha if args.alpha is not None else _cfg_flat_get(cfg, "runtime_alpha", runtime_cfg.get("alpha", 0.5))
-    min_acc = args.min_accuracy if args.min_accuracy is not None else _cfg_flat_get(cfg, "runtime_min_accuracy", runtime_cfg.get("min_accuracy"))
-    max_lat = args.max_latency if args.max_latency is not None else _cfg_flat_get(cfg, "runtime_max_latency", runtime_cfg.get("max_latency"))
-
-    router_cfg = runtime_cfg.get("router") or {}
-    flat_router_cfg = {
-        "type": _cfg_flat_get(cfg, "router_type"),
-        "query_data_file": _cfg_flat_get(cfg, "router_query_data_file"),
-        "k": _cfg_flat_get(cfg, "router_k"),
-        "embedding_model": _cfg_flat_get(cfg, "router_embedding_model"),
-        "max_length": _cfg_flat_get(cfg, "router_max_length"),
-        "embedding_batch_size": _cfg_flat_get(cfg, "router_embedding_batch_size"),
-        "embedding_cache_file": _cfg_flat_get(cfg, "router_embedding_cache_file"),
-        "accuracy_thresholds": _cfg_flat_get(cfg, "router_accuracy_thresholds"),
-        "top_k": _cfg_flat_get(cfg, "router_top_k"),
-    }
-    merged_router_cfg = {**flat_router_cfg, **router_cfg}
-    router_type = args.router or merged_router_cfg.get("type")
-
-    if not compiled or not queries_path or not workflow_type:
-        raise SystemExit("compiled, queries, and workflow_type are required")
-
-    queries = _load_queries(queries_path)
-    selections = []
-
-    if router_type == "knn":
-        merged_router_cfg["search_space"] = _build_search_space_with_cfg(args, router_cfg, cfg=cfg, prefix="router")
-        if not merged_router_cfg.get("query_data_file"):
-            raise SystemExit("router.query_data_file is required for knn")
-        router = build_knn_router(
-            query_data_file=merged_router_cfg.get("query_data_file"),
-            k=merged_router_cfg.get("k", 10),
-            embedding_model=merged_router_cfg.get("embedding_model", "allenai/longformer-base-4096"),
-            max_length=merged_router_cfg.get("max_length", 4096),
-            embedding_batch_size=merged_router_cfg.get("embedding_batch_size", 8),
-            embedding_cache_file=merged_router_cfg.get("embedding_cache_file"),
-            accuracy_thresholds=merged_router_cfg.get("accuracy_thresholds"),
-            search_space=merged_router_cfg.get("search_space"),
-        )
-        for q in queries:
-            pareto_configs = route_query(router, q, workflow_type=workflow_type, top_k=merged_router_cfg.get("top_k", 5))
-            chosen = select_config(
-                pareto_configs,
-                strategy=strategy,
-                alpha=alpha,
-                min_accuracy=min_acc,
-                max_latency=max_lat,
-            )
-            selections.append({"query": q, "config": chosen})
-    else:
-        configs = _load_compiled_configs(compiled)
-        chosen = select_config(
-            configs,
-            strategy=strategy,
-            alpha=alpha,
-            min_accuracy=min_acc,
-            max_latency=max_lat,
-        )
-        for q in queries:
-            selections.append({"query": q, "config": chosen})
-
-    output_path_obj = Path(output_path)
-    output_path_obj.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path_obj, "w", encoding="utf-8") as f:
-        for item in selections:
-            f.write(json.dumps(item) + "\n")
-    return 0
-
-
 def cmd_runtime_infer(args, cfg):
     runtime_cfg = _cfg_get(cfg, "runtime", default={})
     experiment_id = _experiment_id_from_cfg(cfg)
@@ -1072,10 +970,6 @@ def cmd_runtime_infer(args, cfg):
         or _cfg_flat_get(cfg, "workflow_type")
         or _cfg_get(cfg, "compile", "workflow_type")
     )
-    selections_path = args.selections or _cfg_flat_get(cfg, "runtime_selections") or runtime_cfg.get("selections")
-    if selections_path is None and root is not None:
-        selections_path = str(root / "runtime" / "selection.jsonl")
-
     compiled = args.compiled or _cfg_flat_get(cfg, "runtime_compiled_configs") or runtime_cfg.get("compiled_configs")
     if compiled is None and root is not None:
         compiled = _resolve_required_input_path(
@@ -1084,14 +978,8 @@ def cmd_runtime_infer(args, cfg):
             canonical_path=str(root / "02_compile" / "compiled_configs.json"),
             detect_patterns=[str(root / "compiled" / "compiled_configs.json")],
         )
-    queries_path = (
-        args.queries
-        or _cfg_flat_get(cfg, "runtime_queries")
-        or runtime_cfg.get("queries")
-        or _cfg_flat_get(cfg, "validate_file")
-    )
-    if queries_path is None:
-        queries_path = _default_split_path_from_workflow(workflow_type, split="validate")
+    single_query = args.query
+    queries_path = args.queries
 
     output_dir = Path(
         args.output_dir
@@ -1099,205 +987,95 @@ def cmd_runtime_infer(args, cfg):
         or runtime_cfg.get("output_dir")
         or (str(root / "runtime" / "outputs") if root is not None else "runtime_outputs")
     )
-    strategy = args.strategy or _cfg_flat_get(cfg, "runtime_strategy") or runtime_cfg.get("strategy", "preference")
-    alpha = args.alpha if args.alpha is not None else _cfg_flat_get(cfg, "runtime_alpha", runtime_cfg.get("alpha", 0.5))
-    min_acc = args.min_accuracy if args.min_accuracy is not None else _cfg_flat_get(cfg, "runtime_min_accuracy", runtime_cfg.get("min_accuracy"))
-    max_lat = args.max_latency if args.max_latency is not None else _cfg_flat_get(cfg, "runtime_max_latency", runtime_cfg.get("max_latency"))
+    deprecated_runtime_routing_keys: List[str] = []
+    deprecated_flat_runtime_keys = (
+        "runtime_strategy",
+        "runtime_alpha",
+        "runtime_min_accuracy",
+        "runtime_max_latency",
+    )
+    for key in deprecated_flat_runtime_keys:
+        if isinstance(cfg, dict) and key in cfg:
+            deprecated_runtime_routing_keys.append(key)
+    if isinstance(runtime_cfg, dict):
+        deprecated_nested_runtime_keys = (
+            "strategy",
+            "alpha",
+            "min_accuracy",
+            "max_latency",
+        )
+        for key in deprecated_nested_runtime_keys:
+            if key in runtime_cfg:
+                deprecated_runtime_routing_keys.append(f"runtime.{key}")
+    if deprecated_runtime_routing_keys:
+        keys_list = ", ".join(sorted(deprecated_runtime_routing_keys))
+        raise SystemExit(
+            "Runtime routing settings must be provided via CLI for `runtime infer`. "
+            f"Remove YAML key(s): {keys_list}. "
+            "Use `--strategy preference --alpha <value>` or "
+            "`--strategy constraint --min-accuracy <value>` and/or `--max-latency <value>`."
+        )
+
+    strategy = args.strategy
+    alpha = args.alpha
+    min_acc = args.min_accuracy
+    max_lat = args.max_latency
 
     if not workflow_type:
         raise SystemExit("workflow_type is required")
-
-    if selections_path:
-        pairs = []
-        with open(selections_path, "r", encoding="utf-8") as f:
-            for line in f:
-                if not line.strip():
-                    continue
-                item = json.loads(line)
-                pairs.append((item.get("query", {}), item.get("config", {})))
+    if not compiled:
+        raise SystemExit("compiled is required")
+    if strategy is None:
+        raise SystemExit("--strategy is required via CLI for runtime infer.")
+    if single_query is not None and queries_path is not None:
+        raise SystemExit("Provide exactly one of --query or --queries.")
+    if single_query is None and queries_path is None:
+        raise SystemExit("Either --query or --queries is required via CLI.")
+    if strategy == "constraint":
+        if alpha is not None:
+            raise SystemExit("--alpha is only valid with --strategy preference.")
+        if min_acc is None and max_lat is None:
+            raise SystemExit("--strategy constraint requires at least one of --min-accuracy or --max-latency.")
     else:
-        # On-the-fly selection
-        if not compiled or not queries_path or not workflow_type:
-            raise SystemExit("compiled, queries, and workflow_type are required")
-        configs = _load_compiled_configs(compiled)
-        queries = _load_queries(queries_path)
-        chosen = select_config(
-            configs,
+        if alpha is None:
+            raise SystemExit("--strategy preference requires --alpha.")
+        if min_acc is not None or max_lat is not None:
+            raise SystemExit("--min-accuracy/--max-latency are only valid with --strategy constraint.")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    configs = _load_compiled_configs(compiled)
+
+    if single_query:
+        result = infer_runtime(
+            query=single_query,
+            configs=configs,
+            workflow_type=workflow_type,
+            output_dir=output_dir,
             strategy=strategy,
             alpha=alpha,
             min_accuracy=min_acc,
             max_latency=max_lat,
+            query_id=args.query_id,
         )
-        pairs = [(q, chosen) for q in queries]
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    results = run_batch_sync(pairs, workflow_type, output_dir)
+    queries = _load_queries(queries_path)
+    results = infer_runtime_batch(
+        queries=queries,
+        configs=configs,
+        workflow_type=workflow_type,
+        output_dir=output_dir,
+        strategy=strategy,
+        alpha=alpha,
+        min_accuracy=min_acc,
+        max_latency=max_lat,
+    )
     out_file = output_dir / "runtime_results.jsonl"
     with open(out_file, "w", encoding="utf-8") as f:
-        for r in results:
-            f.write(json.dumps(r) + "\n")
+        for item in results:
+            f.write(json.dumps(item) + "\n")
     return 0
-
-
-def cmd_runtime_knn(args, cfg):
-    runtime_cfg = _cfg_get(cfg, "runtime", default={})
-    knn_cfg = runtime_cfg.get("knn", {})
-
-    def pick(name, default=None, flat_key=None):
-        value = getattr(args, name, None)
-        if value is not None:
-            return value
-        if flat_key and flat_key in cfg:
-            return cfg.get(flat_key)
-        return knn_cfg.get(name, default)
-
-    def pick_bool(name, default=False, flat_key=None):
-        value = getattr(args, name, False)
-        if value:
-            return True
-        if flat_key and flat_key in cfg:
-            return bool(cfg.get(flat_key))
-        return bool(knn_cfg.get(name, default))
-
-    experiment_id = pick("experiment_id", _cfg_flat_get(cfg, "experiment_id"), flat_key="knn_experiment_id") or _cfg_get(cfg, "compile", "experiment_id")
-    workflow_type = (
-        pick("workflow_type", _cfg_flat_get(cfg, "workflow_type"), flat_key="knn_workflow_type")
-        or runtime_cfg.get("workflow_type")
-    )
-    if not experiment_id:
-        raise SystemExit("experiment_id is required for runtime knn")
-    if not workflow_type:
-        raise SystemExit("workflow_type is required for runtime knn")
-    root = _exp_root(experiment_id)
-
-    detailed_results = pick("detailed_results", flat_key="knn_detailed_results")
-    if isinstance(detailed_results, str):
-        detailed_results = [detailed_results]
-    if detailed_results:
-        detailed_results = _resolve_required_input_list("detailed_results", explicit_values=detailed_results)
-    else:
-        detailed_results = _resolve_required_input_list(
-            "detailed_results",
-            explicit_values=None,
-            canonical_patterns=[str(root / "01_profile" / "benchmark_*" / "detailed_results.json")],
-            fallback_patterns=[
-                str(root / "benchmark_*" / "detailed_results.json"),
-                str(root / "data" / "benchmark_*" / "detailed_results.json"),
-            ],
-        )
-
-    trace_data = pick("trace_data", flat_key="knn_trace_data")
-    trace_data = _resolve_required_input_path(
-        "trace_data",
-        explicit_value=trace_data,
-        canonical_path=str(root / "01_profile" / "aggregated_training_data.json"),
-        detect_patterns=[
-            str(root / "data" / "aggregated_training_data.json"),
-            str(root / "01_profile" / "*training_data.json"),
-            str(root / "data" / "*training_data.json"),
-        ],
-    )
-    latency_file = pick("latency_file", flat_key="knn_latency_file")
-    latency_file = _resolve_canonical_latency_file(
-        experiment_id,
-        explicit_value=latency_file,
-        label="latency_file",
-    )
-
-    test_data = pick("test_data", flat_key="knn_test_data")
-    if test_data is None:
-        test_data = _cfg_flat_get(cfg, "test_file") or _default_split_path_from_workflow(workflow_type, split="test")
-
-    accuracy_thresholds = pick("accuracy_thresholds", flat_key="knn_accuracy_thresholds")
-    if isinstance(accuracy_thresholds, str):
-        accuracy_thresholds = [float(x) for x in accuracy_thresholds.split(",") if x]
-    if not accuracy_thresholds:
-        accuracy_thresholds = [0.8, 0.85, 0.9, 0.95, 0.99]
-
-    data_files = pick("data_files", flat_key="knn_data_files")
-    if data_files is None:
-        validate_path = _cfg_flat_get(cfg, "validate_file") or _default_split_path_from_workflow(workflow_type, split="validate")
-        test_path = _cfg_flat_get(cfg, "test_file") or _default_split_path_from_workflow(workflow_type, split="test")
-        data_files = [p for p in [validate_path, test_path] if p]
-
-    ns = SimpleNamespace(
-        experiment_id=experiment_id,
-        workflow_type=workflow_type,
-        detailed_results=detailed_results,
-        trace_data=trace_data,
-        latency_file=latency_file,
-        test_data=test_data,
-        k=pick("k", 10, flat_key="knn_k"),
-        embedding_model=pick("embedding_model", "allenai/longformer-base-4096", flat_key="knn_embedding_model"),
-        max_length=pick("max_length", 4096, flat_key="knn_max_length"),
-        batch_size=pick("batch_size", 8, flat_key="knn_batch_size"),
-        embedding_cache_file=pick("embedding_cache_file", flat_key="knn_embedding_cache_file"),
-        accuracy_thresholds=accuracy_thresholds,
-        output_dir=pick("output_dir", str(root / "knn"), flat_key="knn_output_dir"),
-        use_cached_consolidation=pick_bool("use_cached_consolidation", False, flat_key="knn_use_cached_consolidation"),
-        data_files=data_files,
-        search_space=_build_search_space_with_cfg(args, knn_cfg, cfg=cfg, prefix="knn"),
-    )
-    return run_knn(ns)
-
-
-def cmd_runtime_knn_evaluate(args, cfg):
-    runtime_cfg = _cfg_get(cfg, "runtime", default={})
-    knn_cfg = runtime_cfg.get("knn_evaluate", {})
-    knn_defaults = runtime_cfg.get("knn", {})
-
-    def pick(name, default=None, flat_key=None):
-        value = getattr(args, name, None)
-        if value is not None:
-            return value
-        if flat_key and flat_key in cfg:
-            return cfg.get(flat_key)
-        return knn_cfg.get(name, default)
-
-    def pick_bool(name, default=False, flat_key=None):
-        value = getattr(args, name, False)
-        if value:
-            return True
-        if flat_key and flat_key in cfg:
-            return bool(cfg.get(flat_key))
-        return bool(knn_cfg.get(name, default))
-
-    experiment_id = _cfg_flat_get(cfg, "experiment_id") or _cfg_get(cfg, "compile", "experiment_id") or knn_defaults.get("experiment_id")
-    workflow_type_for_knn = (
-        _cfg_flat_get(cfg, "knn_workflow_type")
-        or _cfg_flat_get(cfg, "workflow_type")
-        or knn_defaults.get("workflow_type")
-        or runtime_cfg.get("workflow_type")
-        or "math"
-    )
-    k_value = _cfg_flat_get(cfg, "knn_k", knn_defaults.get("k", 10))
-    root = _exp_root(experiment_id) if experiment_id else None
-
-    config_file = pick("config_file", flat_key="knn_evaluate_config_file")
-    if config_file is None and root is not None:
-        config_file = _resolve_required_input_path(
-            "config_file",
-            explicit_value=None,
-            canonical_path=str(root / "knn" / f"{workflow_type_for_knn}_knn_k{k_value}.json"),
-            detect_patterns=[str(root / "knn" / "*_knn_k*.json")],
-        )
-
-    output_dir = pick("output_dir", flat_key="knn_evaluate_output_dir")
-    if output_dir is None and root is not None:
-        output_dir = str(root / "knn" / "evaluated")
-
-    ns = SimpleNamespace(
-        config_file=config_file,
-        output_file=pick("output_file", flat_key="knn_evaluate_output_file"),
-        output_dir=output_dir,
-        workflow_type=pick("workflow_type", _cfg_flat_get(cfg, "knn_evaluate_workflow_type", "fixed"), flat_key="knn_evaluate_workflow_type"),
-        parallel=pick("parallel", _cfg_flat_get(cfg, "knn_evaluate_parallel", 32), flat_key="knn_evaluate_parallel"),
-        shuffle=pick_bool("shuffle", False, flat_key="knn_evaluate_shuffle"),
-        random_seed=pick("random_seed", _cfg_flat_get(cfg, "knn_evaluate_random_seed", 42), flat_key="knn_evaluate_random_seed"),
-        resume=pick_bool("resume", False, flat_key="knn_evaluate_resume"),
-    )
-    return asyncio.run(run_knn_evaluate(ns))
-
 
 def cmd_experiments(args, cfg):
     name = args.name
@@ -1477,55 +1255,17 @@ def main():
     runtime = subparsers.add_parser("runtime")
     runtime_sub = runtime.add_subparsers(dest="runtime_command", required=True)
 
-    sel = runtime_sub.add_parser("select")
-    sel.add_argument("--compiled")
-    sel.add_argument("--queries")
-    sel.add_argument("--output")
-    sel.add_argument("--workflow-type")
-    sel.add_argument("--strategy", choices=["preference", "constraint"], default="preference")
-    sel.add_argument("--alpha", type=float)
-    sel.add_argument("--min-accuracy", type=float)
-    sel.add_argument("--max-latency", type=float)
-    sel.add_argument("--router", choices=["knn"])
-
     inf = runtime_sub.add_parser("infer")
-    inf.add_argument("--selections")
+    inf.add_argument("--query")
+    inf.add_argument("--query-id")
     inf.add_argument("--compiled")
     inf.add_argument("--queries")
     inf.add_argument("--output-dir")
     inf.add_argument("--workflow-type")
-    inf.add_argument("--strategy", choices=["preference", "constraint"], default="preference")
+    inf.add_argument("--strategy", choices=["preference", "constraint"], default=None)
     inf.add_argument("--alpha", type=float)
     inf.add_argument("--min-accuracy", type=float)
     inf.add_argument("--max-latency", type=float)
-
-    knn = runtime_sub.add_parser("knn")
-    knn.add_argument("--experiment-id")
-    knn.add_argument("--workflow-type", choices=["math", "gsm8k", "hotpotqa", "livecodebench"])
-    knn.add_argument("--detailed-results", nargs="+")
-    knn.add_argument("--trace-data")
-    knn.add_argument("--latency-file")
-    knn.add_argument("--test-data")
-    knn.add_argument("--k", type=int)
-    knn.add_argument("--embedding-model")
-    knn.add_argument("--max-length", type=int)
-    knn.add_argument("--batch-size", type=int)
-    knn.add_argument("--embedding-cache-file")
-    knn.add_argument("--accuracy-thresholds", type=float, nargs="+")
-    knn.add_argument("--output-dir")
-    knn.add_argument("--use-cached-consolidation", action="store_true")
-    knn.add_argument("--data-files", nargs="+")
-    _add_search_space_args(knn)
-
-    knn_eval = runtime_sub.add_parser("knn-evaluate")
-    knn_eval.add_argument("--config-file")
-    knn_eval.add_argument("--output-file")
-    knn_eval.add_argument("--output-dir")
-    knn_eval.add_argument("--workflow-type", choices=["fixed", "meta"], default="fixed")
-    knn_eval.add_argument("--parallel", type=int, default=32)
-    knn_eval.add_argument("--shuffle", action="store_true")
-    knn_eval.add_argument("--random-seed", type=int, default=42)
-    knn_eval.add_argument("--resume", action="store_true")
 
     # experiments
     exp = subparsers.add_parser("experiments")
@@ -1562,14 +1302,8 @@ def main():
         return cmd_test(args, cfg)
 
     if args.command == "runtime":
-        if args.runtime_command == "select":
-            return cmd_runtime_select(args, cfg)
         if args.runtime_command == "infer":
             return cmd_runtime_infer(args, cfg)
-        if args.runtime_command == "knn":
-            return cmd_runtime_knn(args, cfg)
-        if args.runtime_command == "knn-evaluate":
-            return cmd_runtime_knn_evaluate(args, cfg)
 
     if args.command == "experiments":
         return cmd_experiments(args, cfg)

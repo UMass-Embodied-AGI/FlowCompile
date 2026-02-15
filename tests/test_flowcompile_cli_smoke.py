@@ -15,7 +15,7 @@ def _write_jsonl(path: Path, rows):
             f.write(json.dumps(row) + "\n")
 
 
-def test_flowcompile_compile_and_select(tmp_path: Path):
+def test_flowcompile_compile_and_runtime_surface(tmp_path: Path):
     repo_root = Path(__file__).resolve().parents[1]
     experiment_id = "smoke_math"
 
@@ -117,30 +117,17 @@ def test_flowcompile_compile_and_select(tmp_path: Path):
     assert "configs" in compiled
     assert "levels" not in compiled
 
-    # Runtime select (select-only)
+    # Removed runtime subcommands should now be rejected by parser.
     queries_file = tmp_path / "queries.jsonl"
     _write_jsonl(queries_file, [{"id": "q1", "problem": "Solve 1+1"}])
 
-    selection_file = tmp_path / "selection.jsonl"
     cmd = [
         sys.executable,
         "-m",
         "workflow_compiler.core.cli",
         "runtime",
         "select",
-        "--compiled",
-        str(compiled_file),
-        "--queries",
-        str(queries_file),
-        "--workflow-type",
-        "math",
-        "--output",
-        str(selection_file),
     ]
-    subprocess.run(cmd, cwd=tmp_path, check=True, env=env)
-
-    assert selection_file.exists()
-    lines = selection_file.read_text().strip().splitlines()
-    assert len(lines) == 1
-    record = json.loads(lines[0])
-    assert "config" in record
+    result = subprocess.run(cmd, cwd=tmp_path, env=env, capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "invalid choice" in result.stderr.lower()

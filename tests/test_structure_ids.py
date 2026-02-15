@@ -22,6 +22,24 @@ def _collect_state_refs(obj: Any) -> List[str]:
     return refs
 
 
+def _collect_list_state_ref_groups(obj: Any, groups: List[List[str]]) -> List[str]:
+    refs: List[str] = []
+    if isinstance(obj, dict):
+        ref = obj.get("ref")
+        if isinstance(ref, str) and ref.startswith("state."):
+            return [ref]
+        for value in obj.values():
+            refs.extend(_collect_list_state_ref_groups(value, groups))
+        return refs
+    if isinstance(obj, list):
+        for value in obj:
+            refs.extend(_collect_list_state_ref_groups(value, groups))
+        if refs:
+            groups.append(refs)
+        return refs
+    return refs
+
+
 def _validate_spec(spec: dict) -> None:
     nodes = spec.get("nodes", [])
     node_ids = {n.get("id") for n in nodes}
@@ -110,3 +128,39 @@ def test_hotpotqa_single_generate_without_ensemble_keeps_path_to_format_answer()
         for edge in pruned.get("edges", [])
     }
     assert ("answer_generate", "format_answer") in edge_name_pairs
+
+
+def test_sc_ensemble_only_kept_for_multi_branch_inputs_across_workflows():
+    for workflow_type in ("math", "hotpotqa", "livecodebench"):
+        workflow = get_workflow_module(workflow_type)
+        spec = workflow.compile()
+        for structure in workflow.enumerate_structures():
+            counts = structure.get("active_agent_counts") or {}
+            if int(counts.get("sc_ensemble", 0)) <= 0:
+                continue
+
+            pruned = apply_structure(spec, structure, workflow_type)
+            node_by_id = {node.get("id"): node for node in pruned.get("nodes", [])}
+            sc_node = next(
+                (node for node in pruned.get("nodes", []) if node.get("name") == "sc_ensemble"),
+                None,
+            )
+            assert sc_node is not None
+
+            groups: List[List[str]] = []
+            inputs = (sc_node.get("io") or {}).get("inputs", {})
+            _collect_list_state_ref_groups(inputs, groups)
+
+            saw_agent_group = False
+            for group in groups:
+                agent_refs = {
+                    ref.split(".", 2)[1]
+                    for ref in group
+                    if len(ref.split(".", 2)) >= 2
+                    and (node_by_id.get(ref.split(".", 2)[1], {}).get("type") == "agent")
+                }
+                if not agent_refs:
+                    continue
+                saw_agent_group = True
+                assert len(agent_refs) >= 2
+            assert saw_agent_group

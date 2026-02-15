@@ -13,7 +13,7 @@ class LiveCodeBenchWorkflowDSL(WorkflowModule):
     def __init__(self):
         super().__init__(name="livecodebench_dsl")
         self.code_generate = AgentNode("code_generate")
-        self.sc_ensemble = AgentNode("sc_ensemble")
+        self.sc_ensemble = AgentNode("sc_ensemble", min_input_branches=2)
         self.test = ToolNode("test", impl="run_code_tests")
         self.reflection_test = AgentNode("reflection_test")
         self.select_final_solution = ToolNode("select_final_solution", impl="first_nonempty")

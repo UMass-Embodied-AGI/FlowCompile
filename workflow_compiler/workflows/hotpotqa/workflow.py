@@ -13,7 +13,7 @@ class HotpotQAWorkflowDSL(WorkflowModule):
     def __init__(self):
         super().__init__(name="hotpotqa_dsl")
         self.answer_generate = AgentNode("answer_generate")
-        self.sc_ensemble = AgentNode("sc_ensemble")
+        self.sc_ensemble = AgentNode("sc_ensemble", min_input_branches=2)
         self.format_answer = AgentNode("format_answer")
 
     def forward(self, query: Dict[str, Any]):

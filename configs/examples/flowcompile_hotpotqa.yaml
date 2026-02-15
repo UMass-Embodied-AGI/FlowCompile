@@ -24,10 +24,4 @@ test_random_seed: 42
 test_pareto_sample_n: 20
 
 # Runtime overrides
-runtime_strategy: "preference"
-runtime_alpha: 0.5
-
-# KNN overrides
-knn_k: 10
-knn_evaluate_parallel: 32
-knn_evaluate_random_seed: 42
+# runtime_output_dir: "results/hotpotqa/runtime/outputs"

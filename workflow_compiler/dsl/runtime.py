@@ -301,53 +301,61 @@ async def run_dsl_query(
     preprocess = _preprocess_query(workflow_type, query, config)
     executor = DslExecutor(spec, workflow_type, config)
 
-    outputs, steps, _state = await executor.run(preprocess.get("inputs", {}))
-    _normalize_workflow_outputs(str(workflow_type).lower(), outputs, _state)
+    try:
+        outputs, steps, _state = await executor.run(preprocess.get("inputs", {}))
+        _normalize_workflow_outputs(str(workflow_type).lower(), outputs, _state)
 
-    # Build trace entry
-    if workflow_type in ("math", "gsm8k"):
-        trace_entry = _build_trace_math(steps, outputs, structure, preprocess)
-        output_value = outputs.get("final_answer", outputs.get("full_solution", outputs.get("final_solution")))
-    elif workflow_type == "hotpotqa":
-        trace_entry = _build_trace_hotpotqa(steps, outputs, structure, preprocess)
-        output_value = outputs.get("final_answer", outputs.get("full_solution", outputs.get("final_solution")))
-    elif workflow_type == "livecodebench":
-        trace_entry = _build_trace_livecodebench(steps, outputs, structure, preprocess)
-        output_value = outputs.get("final_answer", outputs.get("full_solution", outputs.get("final_solution")))
-    else:
-        trace_entry = {
-            "timestamp": datetime.now().isoformat(),
-            "steps": steps,
-        }
-        output_value = outputs
+        # Build trace entry
+        if workflow_type in ("math", "gsm8k"):
+            trace_entry = _build_trace_math(steps, outputs, structure, preprocess)
+            output_value = outputs.get("final_answer", outputs.get("full_solution", outputs.get("final_solution")))
+        elif workflow_type == "hotpotqa":
+            trace_entry = _build_trace_hotpotqa(steps, outputs, structure, preprocess)
+            output_value = outputs.get("final_answer", outputs.get("full_solution", outputs.get("final_solution")))
+        elif workflow_type == "livecodebench":
+            trace_entry = _build_trace_livecodebench(steps, outputs, structure, preprocess)
+            output_value = outputs.get("final_answer", outputs.get("full_solution", outputs.get("final_solution")))
+        else:
+            trace_entry = {
+                "timestamp": datetime.now().isoformat(),
+                "steps": steps,
+            }
+            output_value = outputs
 
-    # Hard guarantee: runtime must never return None as workflow output.
-    if output_value is None:
-        logger.error(
-            f"{workflow_type} workflow output resolved to None after normalization. "
-            "Returning empty string fallback."
-        )
-        output_value = ""
-        if isinstance(outputs, dict):
-            if _is_empty_output(outputs.get("final_answer")):
-                outputs["final_answer"] = output_value
-            if _is_empty_output(outputs.get("full_solution")):
-                outputs["full_solution"] = output_value
-            if _is_empty_output(outputs.get("final_solution")):
-                outputs["final_solution"] = output_value
-        if isinstance(trace_entry, dict):
-            for key in ("final_answer", "full_solution", "final_solution"):
-                if key in trace_entry and _is_empty_output(trace_entry.get(key)):
-                    trace_entry[key] = output_value
+        # Hard guarantee: runtime must never return None as workflow output.
+        if output_value is None:
+            logger.error(
+                f"{workflow_type} workflow output resolved to None after normalization. "
+                "Returning empty string fallback."
+            )
+            output_value = ""
+            if isinstance(outputs, dict):
+                if _is_empty_output(outputs.get("final_answer")):
+                    outputs["final_answer"] = output_value
+                if _is_empty_output(outputs.get("full_solution")):
+                    outputs["full_solution"] = output_value
+                if _is_empty_output(outputs.get("final_solution")):
+                    outputs["final_solution"] = output_value
+            if isinstance(trace_entry, dict):
+                for key in ("final_answer", "full_solution", "final_solution"):
+                    if key in trace_entry and _is_empty_output(trace_entry.get(key)):
+                        trace_entry[key] = output_value
 
-    # Write trace
-    trace_file = output_dir / "trace.jsonl"
-    trace_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(trace_file, "a", encoding="utf-8") as f:
-        import json
-        f.write(json.dumps(trace_entry, ensure_ascii=False) + "\n")
+        # Write trace
+        trace_file = output_dir / "trace.jsonl"
+        trace_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(trace_file, "a", encoding="utf-8") as f:
+            import json
+            f.write(json.dumps(trace_entry, ensure_ascii=False) + "\n")
 
-    return output_value
+        return output_value
+    finally:
+        close_method = getattr(executor, "aclose", None)
+        if close_method:
+            try:
+                await close_method()
+            except Exception:
+                pass
 
 
 class DslWorkflowRunner:

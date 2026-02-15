@@ -22,12 +22,8 @@ router = get_router(
 
 ## Runtime CLI
 
-```bash
-flowcompile runtime knn \
-  --experiment-id my_exp \
-  --workflow-type math \
-  --test-data data/ours/math500_test.jsonl \
-  --k 10
-```
+Router-specific runtime CLI commands are removed. Runtime execution is now unified under:
 
-The routed output is written under `results/<experiment>/knn/`.
+```bash
+flowcompile runtime infer
+```

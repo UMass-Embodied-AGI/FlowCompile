@@ -156,7 +156,7 @@ Reference:
    - `workflow_compiler/core/cli.py` (`_validate_flat_config`)
    - `workflow_compiler/dsl/runtime.py` (`_preprocess_query`, trace builder logic)
    - `workflow_compiler/runtime/engine.py` (runtime LLM config mapping)
-   - `workflow_compiler/runtime/knn_evaluate.py` (`_build_llm_configs_for_workflow`)
+   - `workflow_compiler/compiler/validation.py` (`_build_llm_configs_for_workflow`)
 7. Create a new config file in `configs/examples/` and run the pipeline:
 
 ```bash
@@ -188,4 +188,46 @@ flowcompile --config "$CONFIG" experiments correlation
 
 ## Runtime
 
-TODO
+`runtime infer` is config-driven for paths/workflow settings, but routing strategy inputs are CLI-only.
+Primary usage is:
+
+```bash
+flowcompile --config "$CONFIG" runtime infer \
+  --query "Solve 1+1" \
+  --strategy preference \
+  --alpha 0.5
+```
+
+`query` / `queries` and runtime routing parameters are always passed via CLI.
+
+Example runtime keys in flat YAML:
+
+```yaml
+# Optional overrides
+runtime_compiled_configs: "results/math500/02_compile/compiled_configs.json"
+runtime_output_dir: "results/math500/runtime/outputs"
+runtime_workflow_type: "math"
+```
+
+Single-query preference routing:
+
+```bash
+flowcompile --config "$CONFIG" runtime infer \
+  --query "Solve 1+1" \
+  --strategy preference \
+  --alpha 0.5 \
+  --query-id "q1"
+```
+
+Batch constraint routing:
+
+```bash
+flowcompile --config "$CONFIG" runtime infer \
+  --queries data/math500_validate.jsonl \
+  --strategy constraint \
+  --min-accuracy 0.9
+```
+
+Constraint strategy selection behavior:
+- `--min-accuracy`: choose the lowest-accuracy config that still satisfies the threshold.
+- `--max-latency`: choose the highest-latency config that still satisfies the threshold.

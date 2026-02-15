@@ -1,8 +1,8 @@
 # Adding a Benchmark (Drop-In)
 
 To add a new benchmark that works with:
-- `flowcompile validate`
-- `flowcompile runtime knn-evaluate`
+- `flowcompile test`
+- `flowcompile runtime infer`
 
 you only need one new file.
 
@@ -56,8 +56,8 @@ No central registry edits are required.
 
 Examples:
 ```bash
-python -m workflow_compiler.core.cli validate --dataset <alias-or-name>
-python -m workflow_compiler.core.cli runtime knn-evaluate --config-file <knn_json>
+python -m workflow_compiler.core.cli test --dataset <alias-or-name>
+python -m workflow_compiler.core.cli runtime infer --compiled <compiled_json> --workflow-type <workflow_type> --query "..."
 ```
 
 Any alias in `ALIASES` resolves to the same benchmark class.

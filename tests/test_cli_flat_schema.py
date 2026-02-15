@@ -77,32 +77,6 @@ def test_load_yaml_rejects_removed_test_keys(tmp_path: Path):
         cli._load_yaml(str(cfg_path))
 
 
-def _empty_knn_args():
-    return SimpleNamespace(
-        experiment_id=None,
-        workflow_type=None,
-        detailed_results=None,
-        trace_data=None,
-        latency_file=None,
-        test_data=None,
-        k=None,
-        embedding_model=None,
-        max_length=None,
-        batch_size=None,
-        embedding_cache_file=None,
-        accuracy_thresholds=None,
-        output_dir=None,
-        use_cached_consolidation=False,
-        data_files=None,
-        search_axes=None,
-        search_models=None,
-        search_budgets=None,
-        search_structures=None,
-        search_agent_models=None,
-        search_agent_budgets=None,
-    )
-
-
 def _empty_predict_args():
     return SimpleNamespace(
         workflow_type=None,
@@ -119,6 +93,18 @@ def _empty_predict_args():
         search_structures=None,
         search_agent_models=None,
         search_agent_budgets=None,
+    )
+
+
+def _empty_profile_args():
+    return SimpleNamespace(
+        experiment_id=None,
+        models=None,
+        max_samples=None,
+        max_concurrent=None,
+        debug=False,
+        min_samples_per_agent=None,
+        search_budgets=None,
     )
 
 
@@ -242,33 +228,6 @@ def test_test_command_rejects_invalid_pareto_sample_n(monkeypatch, tmp_path: Pat
     )
     with pytest.raises(SystemExit, match="--pareto-sample-n must be >= 1"):
         cli.cmd_test(_empty_test_args(), _flat_cfg(test_pareto_sample_n=0))
-
-
-def test_runtime_knn_defaults_to_flat_validate_and_test_files(monkeypatch, tmp_path: Path):
-    monkeypatch.chdir(tmp_path)
-    exp = "exp_flat"
-    root = tmp_path / "results" / exp / "01_profile"
-    _write_json(root / "benchmark_1" / "detailed_results.json", {})
-    _write_json(root / "aggregated_training_data.json", {"training_data": []})
-    _write_json(root / "latency_benchmark.json", {})
-
-    captured = {}
-
-    def fake_run_knn(ns):
-        captured["ns"] = ns
-        return 0
-
-    monkeypatch.setattr(cli, "run_knn", fake_run_knn)
-
-    cfg = _flat_cfg(
-        experiment_id=exp,
-        validate_file="data/math500_validate_10.jsonl",
-        test_file="data/math500_test_10.jsonl",
-    )
-    assert cli.cmd_runtime_knn(_empty_knn_args(), cfg) == 0
-    ns = captured["ns"]
-    assert ns.test_data == "data/math500_test_10.jsonl"
-    assert ns.data_files == ["data/math500_validate_10.jsonl", "data/math500_test_10.jsonl"]
 
 
 def test_compile_predict_derives_search_models_from_latency_models(monkeypatch, tmp_path: Path):
@@ -422,3 +381,31 @@ def test_cmd_compile_all_runs_latency_prepare_profile_predict_test_in_order(monk
 
     assert cli.cmd_compile_all(SimpleNamespace(), {}) == 0
     assert call_order == ["get-latency", "prepare-data", "profile", "predict", "test"]
+
+
+def test_cmd_compile_profile_uses_flat_min_samples_per_agent(monkeypatch):
+    captured = {}
+
+    async def fake_run_profiling(**kwargs):
+        captured.update(kwargs)
+        return Path("results/exp_flat/01_profile/benchmark_00000000_000000")
+
+    monkeypatch.setattr(cli, "run_profiling", fake_run_profiling)
+
+    cfg = _flat_cfg(min_samples_per_agent=321)
+    assert cli.cmd_compile_profile(_empty_profile_args(), cfg) == 0
+    assert captured["min_samples_per_agent"] == 321
+
+
+def test_cmd_compile_profile_prefers_profile_specific_min_samples(monkeypatch):
+    captured = {}
+
+    async def fake_run_profiling(**kwargs):
+        captured.update(kwargs)
+        return Path("results/exp_flat/01_profile/benchmark_00000000_000000")
+
+    monkeypatch.setattr(cli, "run_profiling", fake_run_profiling)
+
+    cfg = _flat_cfg(min_samples_per_agent=321, profile_min_samples_per_agent=123)
+    assert cli.cmd_compile_profile(_empty_profile_args(), cfg) == 0
+    assert captured["min_samples_per_agent"] == 123
