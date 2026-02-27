@@ -21,7 +21,7 @@ min_samples_per_agent: 500
 test_parallel: 4
 test_max_tasks: 16
 test_random_seed: 42
-test_pareto_sample_n: 20
+test_pareto_sample_n: -1  # -1 disables sampling and evaluates all searched Pareto configs
 
 # Runtime overrides
 # runtime_output_dir: "results/math500/runtime/outputs"

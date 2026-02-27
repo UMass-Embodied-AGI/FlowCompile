@@ -952,9 +952,9 @@ def cmd_test(args, cfg):
         try:
             ns.pareto_sample_n = int(ns.pareto_sample_n)
         except (TypeError, ValueError) as exc:
-            raise SystemExit("--pareto-sample-n must be an integer >= 1") from exc
-        if ns.pareto_sample_n < 1:
-            raise SystemExit("--pareto-sample-n must be >= 1")
+            raise SystemExit("--pareto-sample-n must be an integer >= 1, or -1 to disable sampling") from exc
+        if ns.pareto_sample_n == 0 or ns.pareto_sample_n < -1:
+            raise SystemExit("--pareto-sample-n must be >= 1, or -1 to disable sampling")
 
     return asyncio.run(run_validation(ns))
 

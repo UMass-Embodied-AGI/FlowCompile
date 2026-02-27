@@ -735,7 +735,7 @@ async def run_validation(args):
     logger.info(f"Evaluating {len(all_configs)} Pareto optimal configurations")
 
     sampling_metadata: Optional[Dict[str, Any]] = None
-    if pareto_sample_n is not None:
+    if pareto_sample_n is not None and pareto_sample_n != -1:
         all_configs, sampling_metadata = _sample_pareto_even_by_latency(all_configs, pareto_sample_n)
         logger.info(
             "Selected Pareto sample: "
@@ -743,6 +743,8 @@ async def run_validation(args):
             f"(n={sampling_metadata['requested_n']}, "
             f"latency={sampling_metadata['latency_min']:.4f}-{sampling_metadata['latency_max']:.4f}s)"
         )
+    elif pareto_sample_n == -1:
+        logger.info("Pareto sampling disabled (pareto_sample_n = -1); evaluating all Pareto configurations")
 
     evaluation_items = _build_evaluation_items(all_configs)
 

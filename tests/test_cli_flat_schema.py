@@ -220,14 +220,36 @@ def test_test_command_forwards_pareto_sample_n(monkeypatch, tmp_path: Path):
     assert captured["ns"].pareto_sample_n == 7
 
 
+def test_test_command_allows_disable_pareto_sampling_with_minus_one(monkeypatch, tmp_path: Path):
+    monkeypatch.chdir(tmp_path)
+    captured = {}
+
+    async def fake_run_validation(ns):
+        captured["ns"] = ns
+        return 0
+
+    monkeypatch.setattr(cli, "run_validation", fake_run_validation)
+    _write_json(
+        tmp_path / "results" / "exp_flat" / "02_compile" / "compiled_configs.json",
+        {"schema_version": "flowcompile.compiled.v2", "configs": []},
+    )
+
+    cfg = _flat_cfg(test_pareto_sample_n=-1)
+    assert cli.cmd_test(_empty_test_args(), cfg) == 0
+    assert captured["ns"].pareto_sample_n == -1
+
+
 def test_test_command_rejects_invalid_pareto_sample_n(monkeypatch, tmp_path: Path):
     monkeypatch.chdir(tmp_path)
     _write_json(
         tmp_path / "results" / "exp_flat" / "02_compile" / "compiled_configs.json",
         {"schema_version": "flowcompile.compiled.v2", "configs": []},
     )
-    with pytest.raises(SystemExit, match="--pareto-sample-n must be >= 1"):
+    with pytest.raises(SystemExit, match="--pareto-sample-n must be >= 1, or -1 to disable sampling"):
         cli.cmd_test(_empty_test_args(), _flat_cfg(test_pareto_sample_n=0))
+
+    with pytest.raises(SystemExit, match="--pareto-sample-n must be >= 1, or -1 to disable sampling"):
+        cli.cmd_test(_empty_test_args(), _flat_cfg(test_pareto_sample_n=-2))
 
 
 def test_compile_predict_derives_search_models_from_latency_models(monkeypatch, tmp_path: Path):
