@@ -718,7 +718,7 @@ def cmd_compile_profile(args, cfg):
         max_samples = _cfg_flat_get(cfg, "profile_max_samples", prof.get("max_samples"))
     max_concurrent = _arg_get(args, "max_concurrent")
     if max_concurrent is None:
-        max_concurrent = _cfg_flat_get(cfg, "profile_max_concurrent", prof.get("max_concurrent", 128))
+        max_concurrent = _cfg_flat_get(cfg, "profile_max_concurrent", prof.get("max_concurrent", 64))
     debug = _arg_get(args, "debug", False) or _cfg_flat_get(cfg, "profile_debug", prof.get("debug", False))
     min_samples = _arg_get(args, "min_samples_per_agent")
     if min_samples is None:

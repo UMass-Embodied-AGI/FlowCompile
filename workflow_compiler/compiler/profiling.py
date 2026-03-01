@@ -185,7 +185,7 @@ class BenchmarkConfig:
     N_REPETITIONS = 1
     
     # Maximum concurrent tasks for parallel inference
-    MAX_CONCURRENT = 128
+    MAX_CONCURRENT = 64
     
     # Debug mode: when enabled, disables parallel evaluation and uses sequential mode
     DEBUG = False
