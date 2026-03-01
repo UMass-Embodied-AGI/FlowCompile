@@ -68,7 +68,7 @@ def select_by_constraints(
 
 def select_by_preference(
     configs: List[Dict[str, Any]],
-    alpha: float,
+    budget: float,
     max_latency: Optional[float] = None,
 ) -> Optional[Dict[str, Any]]:
     if not configs:
@@ -85,7 +85,7 @@ def select_by_preference(
         acc = _get_metric(cfg, "expected_accuracy")
         lat = _get_metric(cfg, "expected_latency")
         norm_latency = lat / max_latency if max_latency else 0.0
-        return alpha * acc + (1 - alpha) * (1 - norm_latency)
+        return budget * acc + (1 - budget) * (1 - norm_latency)
 
     return max(configs, key=utility)
 
@@ -93,10 +93,10 @@ def select_by_preference(
 def select_config(
     configs: List[Dict[str, Any]],
     strategy: str = "preference",
-    alpha: float = 0.5,
+    budget: float = 0.5,
     min_accuracy: Optional[float] = None,
     max_latency: Optional[float] = None,
 ) -> Optional[Dict[str, Any]]:
     if strategy == "constraint":
         return select_by_constraints(configs, min_accuracy, max_latency)
-    return select_by_preference(configs, alpha, max_latency)
+    return select_by_preference(configs, budget, max_latency)

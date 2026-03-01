@@ -109,6 +109,15 @@ def test_select_runtime_config_raises_for_no_match():
         runtime_infer.select_runtime_config([], strategy="preference")
 
 
+def test_select_runtime_config_preference_accepts_budget_keyword():
+    selected = runtime_infer.select_runtime_config(
+        _constraint_configs(),
+        strategy="preference",
+        budget=1.0,
+    )
+    assert selected["config_id"] == "cfg_d"
+
+
 def test_select_runtime_config_constraint_prefers_lowest_accuracy_meeting_min():
     selected = runtime_infer.select_runtime_config(
         _constraint_configs(),
@@ -116,6 +125,15 @@ def test_select_runtime_config_constraint_prefers_lowest_accuracy_meeting_min():
         min_accuracy=0.50,
     )
     assert selected["config_id"] == "cfg_b"
+
+
+def test_select_runtime_config_preference_budget_zero_favors_latency():
+    selected = runtime_infer.select_runtime_config(
+        _constraint_configs(),
+        strategy="preference",
+        budget=0.0,
+    )
+    assert selected["config_id"] == "cfg_a"
 
 
 def test_select_runtime_config_constraint_prefers_highest_latency_meeting_max():

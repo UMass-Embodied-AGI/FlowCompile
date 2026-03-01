@@ -45,6 +45,12 @@ _REQUIRED_FLAT_KEYS = {
     "search_axes",
     "search_budgets",
 }
+_RUNTIME_PREFERENCE_BUDGET_PRESETS = {
+    "low": 0.001,
+    "medium": 0.5,
+    "high": 0.9,
+    "xhigh": 0.999,
+}
 _REMOVED_TEST_KEYS = {
     "test_pareto_only",
     "test_non_pareto_only",
@@ -209,6 +215,42 @@ def _cfg_get(cfg: Dict[str, Any], *keys, default=None):
 
 def _arg_get(args: Any, name: str, default: Any = None) -> Any:
     return getattr(args, name, default)
+
+
+def _parse_runtime_preference_budget(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+
+    if isinstance(value, bool):
+        raise SystemExit(
+            "--budget must be one of low, medium, high, xhigh, or a float between 0.0 and 1.0."
+        )
+
+    if isinstance(value, (int, float)):
+        budget = float(value)
+    elif isinstance(value, str):
+        text = value.strip()
+        if not text:
+            raise SystemExit(
+                "--budget must be one of low, medium, high, xhigh, or a float between 0.0 and 1.0."
+            )
+        if text in _RUNTIME_PREFERENCE_BUDGET_PRESETS:
+            budget = _RUNTIME_PREFERENCE_BUDGET_PRESETS[text]
+        else:
+            try:
+                budget = float(text)
+            except ValueError as exc:
+                raise SystemExit(
+                    "--budget must be one of low, medium, high, xhigh, or a float between 0.0 and 1.0."
+                ) from exc
+    else:
+        raise SystemExit(
+            "--budget must be one of low, medium, high, xhigh, or a float between 0.0 and 1.0."
+        )
+
+    if not 0.0 <= budget <= 1.0:
+        raise SystemExit("--budget must be between 0.0 and 1.0.")
+    return budget
 
 
 def _format_runtime_agent_setting(agent_info: Dict[str, Any]) -> str:
@@ -1048,6 +1090,7 @@ def cmd_runtime_infer(args, cfg):
     deprecated_runtime_routing_keys: List[str] = []
     deprecated_flat_runtime_keys = (
         "runtime_strategy",
+        "runtime_budget",
         "runtime_alpha",
         "runtime_min_accuracy",
         "runtime_max_latency",
@@ -1058,6 +1101,7 @@ def cmd_runtime_infer(args, cfg):
     if isinstance(runtime_cfg, dict):
         deprecated_nested_runtime_keys = (
             "strategy",
+            "budget",
             "alpha",
             "min_accuracy",
             "max_latency",
@@ -1070,12 +1114,13 @@ def cmd_runtime_infer(args, cfg):
         raise SystemExit(
             "Runtime routing settings must be provided via CLI for `runtime infer`. "
             f"Remove YAML key(s): {keys_list}. "
-            "Use `--strategy preference --alpha <value>` or "
+            "Use `--strategy preference --budget <value>` "
+            "(preset: low/medium/high/xhigh or float) or "
             "`--strategy constraint --min-accuracy <value>` and/or `--max-latency <value>`."
         )
 
     strategy = args.strategy
-    alpha = args.alpha
+    budget = _parse_runtime_preference_budget(args.budget)
     min_acc = args.min_accuracy
     max_lat = args.max_latency
 
@@ -1090,13 +1135,13 @@ def cmd_runtime_infer(args, cfg):
     if single_query is None and queries_path is None:
         raise SystemExit("Either --query or --queries is required via CLI.")
     if strategy == "constraint":
-        if alpha is not None:
-            raise SystemExit("--alpha is only valid with --strategy preference.")
+        if budget is not None:
+            raise SystemExit("--budget is only valid with --strategy preference.")
         if min_acc is None and max_lat is None:
             raise SystemExit("--strategy constraint requires at least one of --min-accuracy or --max-latency.")
     else:
-        if alpha is None:
-            raise SystemExit("--strategy preference requires --alpha.")
+        if budget is None:
+            raise SystemExit("--strategy preference requires --budget.")
         if min_acc is not None or max_lat is not None:
             raise SystemExit("--min-accuracy/--max-latency are only valid with --strategy constraint.")
 
@@ -1110,7 +1155,7 @@ def cmd_runtime_infer(args, cfg):
             workflow_type=workflow_type,
             output_dir=output_dir,
             strategy=strategy,
-            alpha=alpha,
+            budget=budget,
             min_accuracy=min_acc,
             max_latency=max_lat,
             query_id=args.query_id,
@@ -1125,7 +1170,7 @@ def cmd_runtime_infer(args, cfg):
         workflow_type=workflow_type,
         output_dir=output_dir,
         strategy=strategy,
-        alpha=alpha,
+        budget=budget,
         min_accuracy=min_acc,
         max_latency=max_lat,
     )
@@ -1321,7 +1366,7 @@ def main():
     inf.add_argument("--output-dir")
     inf.add_argument("--workflow-type")
     inf.add_argument("--strategy", choices=["preference", "constraint"], default=None)
-    inf.add_argument("--alpha", type=float)
+    inf.add_argument("--budget")
     inf.add_argument("--min-accuracy", type=float)
     inf.add_argument("--max-latency", type=float)
 

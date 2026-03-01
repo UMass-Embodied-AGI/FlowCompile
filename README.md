@@ -195,7 +195,7 @@ Primary usage is:
 flowcompile --config "$CONFIG" runtime infer \
   --query "Solve 1+1" \
   --strategy preference \
-  --alpha 0.5
+  --budget 0.5
 ```
 
 `query` / `queries` and runtime routing parameters are always passed via CLI.
@@ -215,8 +215,24 @@ Single-query preference routing:
 flowcompile --config "$CONFIG" runtime infer \
   --query "Solve 1+1" \
   --strategy preference \
-  --alpha 0.5 \
+  --budget 0.5 \
   --query-id "q1"
+```
+
+Named runtime preference budgets are also supported:
+
+- `low` = `0.001`
+- `medium` = `0.5`
+- `high` = `0.9`
+- `xhigh` = `0.999`
+
+Example:
+
+```bash
+flowcompile --config "$CONFIG" runtime infer \
+  --query "Solve 1+1" \
+  --strategy preference \
+  --budget high
 ```
 
 Single-query output is now human-readable and includes the selected config, sub-agent settings, final workflow output, and measured wall-clock runtime. Example:

@@ -26,14 +26,14 @@ def _normalize_query(
 def select_runtime_config(
     configs: List[Dict[str, Any]],
     strategy: str = "preference",
-    alpha: float = 0.5,
+    budget: float = 0.5,
     min_accuracy: Optional[float] = None,
     max_latency: Optional[float] = None,
 ) -> Dict[str, Any]:
     selected = select_config(
         configs,
         strategy=strategy,
-        alpha=alpha,
+        budget=budget,
         min_accuracy=min_accuracy,
         max_latency=max_latency,
     )
@@ -82,7 +82,7 @@ def infer_runtime(
     workflow_type: str,
     output_dir: Path,
     strategy: str = "preference",
-    alpha: float = 0.5,
+    budget: float = 0.5,
     min_accuracy: Optional[float] = None,
     max_latency: Optional[float] = None,
     query_id: Optional[str] = None,
@@ -90,7 +90,7 @@ def infer_runtime(
     selected = select_runtime_config(
         configs,
         strategy=strategy,
-        alpha=alpha,
+        budget=budget,
         min_accuracy=min_accuracy,
         max_latency=max_latency,
     )
@@ -105,14 +105,14 @@ def infer_runtime_batch(
     workflow_type: str,
     output_dir: Path,
     strategy: str = "preference",
-    alpha: float = 0.5,
+    budget: float = 0.5,
     min_accuracy: Optional[float] = None,
     max_latency: Optional[float] = None,
 ) -> List[Dict[str, Any]]:
     selected = select_runtime_config(
         configs,
         strategy=strategy,
-        alpha=alpha,
+        budget=budget,
         min_accuracy=min_accuracy,
         max_latency=max_latency,
     )

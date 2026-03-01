@@ -29,7 +29,7 @@ def _runtime_args(**overrides):
         output_dir=None,
         workflow_type="math",
         strategy="preference",
-        alpha=0.5,
+        budget="0.5",
         min_accuracy=None,
         max_latency=None,
     )
@@ -342,7 +342,7 @@ def test_runtime_infer_constraint_requires_at_least_one_constraint(tmp_path: Pat
         query="Solve 1+1",
         compiled=str(compiled_file),
         strategy="constraint",
-        alpha=None,
+        budget=None,
         min_accuracy=None,
         max_latency=None,
     )
@@ -350,30 +350,30 @@ def test_runtime_infer_constraint_requires_at_least_one_constraint(tmp_path: Pat
         cli.cmd_runtime_infer(args, {})
 
 
-def test_runtime_infer_constraint_rejects_alpha(tmp_path: Path):
+def test_runtime_infer_constraint_rejects_budget(tmp_path: Path):
     compiled_file = tmp_path / "compiled_configs.json"
     _write_json(compiled_file, {"schema_version": "flowcompile.compiled.v2", "configs": [{"config_id": "cfg_0000"}]})
     args = _runtime_args(
         query="Solve 1+1",
         compiled=str(compiled_file),
         strategy="constraint",
-        alpha=0.5,
+        budget="0.5",
         min_accuracy=0.8,
     )
-    with pytest.raises(SystemExit, match="--alpha is only valid with --strategy preference"):
+    with pytest.raises(SystemExit, match="--budget is only valid with --strategy preference"):
         cli.cmd_runtime_infer(args, {})
 
 
-def test_runtime_infer_preference_requires_alpha(tmp_path: Path):
+def test_runtime_infer_preference_requires_budget(tmp_path: Path):
     compiled_file = tmp_path / "compiled_configs.json"
     _write_json(compiled_file, {"schema_version": "flowcompile.compiled.v2", "configs": [{"config_id": "cfg_0000"}]})
     args = _runtime_args(
         query="Solve 1+1",
         compiled=str(compiled_file),
         strategy="preference",
-        alpha=None,
+        budget=None,
     )
-    with pytest.raises(SystemExit, match="--strategy preference requires --alpha"):
+    with pytest.raises(SystemExit, match="--strategy preference requires --budget"):
         cli.cmd_runtime_infer(args, {})
 
 
@@ -384,7 +384,7 @@ def test_runtime_infer_preference_rejects_constraint_flags(tmp_path: Path):
         query="Solve 1+1",
         compiled=str(compiled_file),
         strategy="preference",
-        alpha=0.5,
+        budget="0.5",
         max_latency=2.0,
     )
     with pytest.raises(SystemExit, match="--min-accuracy/--max-latency are only valid with --strategy constraint"):
@@ -398,7 +398,7 @@ def test_runtime_infer_rejects_deprecated_flat_runtime_routing_keys_in_yaml(tmp_
         query="Solve 1+1",
         compiled=str(compiled_file),
         strategy="preference",
-        alpha=0.5,
+        budget="0.5",
     )
     cfg = {
         "runtime_strategy": "preference",
@@ -414,10 +414,111 @@ def test_runtime_infer_rejects_deprecated_nested_runtime_routing_keys_in_yaml(tm
         query="Solve 1+1",
         compiled=str(compiled_file),
         strategy="preference",
-        alpha=0.5,
+        budget="0.5",
     )
     cfg = {
         "runtime": {"alpha": 0.2},
     }
     with pytest.raises(SystemExit, match="Remove YAML key\\(s\\): runtime.alpha"):
         cli.cmd_runtime_infer(args, cfg)
+
+
+def test_runtime_infer_rejects_deprecated_flat_runtime_budget_key_in_yaml(tmp_path: Path):
+    compiled_file = tmp_path / "compiled_configs.json"
+    _write_json(compiled_file, {"schema_version": "flowcompile.compiled.v2", "configs": [{"config_id": "cfg_0000"}]})
+    args = _runtime_args(
+        query="Solve 1+1",
+        compiled=str(compiled_file),
+        strategy="preference",
+        budget="0.5",
+    )
+    cfg = {
+        "runtime_budget": "high",
+    }
+    with pytest.raises(SystemExit, match="Remove YAML key\\(s\\): runtime_budget"):
+        cli.cmd_runtime_infer(args, cfg)
+
+
+def test_runtime_infer_rejects_deprecated_nested_runtime_budget_key_in_yaml(tmp_path: Path):
+    compiled_file = tmp_path / "compiled_configs.json"
+    _write_json(compiled_file, {"schema_version": "flowcompile.compiled.v2", "configs": [{"config_id": "cfg_0000"}]})
+    args = _runtime_args(
+        query="Solve 1+1",
+        compiled=str(compiled_file),
+        strategy="preference",
+        budget="0.5",
+    )
+    cfg = {
+        "runtime": {"budget": "high"},
+    }
+    with pytest.raises(SystemExit, match="Remove YAML key\\(s\\): runtime.budget"):
+        cli.cmd_runtime_infer(args, cfg)
+
+
+@pytest.mark.parametrize(
+    ("raw_budget", "expected_budget"),
+    [
+        ("0.2", 0.2),
+        ("low", 0.001),
+        ("medium", 0.5),
+        ("high", 0.9),
+        ("xhigh", 0.999),
+    ],
+)
+def test_runtime_infer_preference_parses_budget_values(monkeypatch, tmp_path: Path, raw_budget, expected_budget):
+    compiled_file = tmp_path / "compiled_configs.json"
+    _write_json(compiled_file, {"schema_version": "flowcompile.compiled.v2", "configs": [{"config_id": "cfg_0000"}]})
+    captured = {}
+
+    def fake_infer_runtime(**kwargs):
+        captured.update(kwargs)
+        return {
+            "query": {"id": "q1", "problem": "Solve 1+1"},
+            "selected_config": {"config_id": "cfg_0000", "structure_id": "full", "agents": {}},
+            "answer": "2",
+            "workflow_output": "2",
+            "actual_runtime_seconds": 1.0,
+            "query_id": "q1",
+            "config_id": "cfg_0000",
+            "structure_id": "full",
+            "output_dir": "runtime_outputs/q1",
+        }
+
+    monkeypatch.setattr(cli, "infer_runtime", fake_infer_runtime)
+
+    args = _runtime_args(
+        query="Solve 1+1",
+        query_id="q1",
+        compiled=str(compiled_file),
+        strategy="preference",
+        budget=raw_budget,
+    )
+
+    assert cli.cmd_runtime_infer(args, {}) == 0
+    assert captured["budget"] == pytest.approx(expected_budget)
+
+
+def test_runtime_infer_rejects_invalid_budget_value(tmp_path: Path):
+    compiled_file = tmp_path / "compiled_configs.json"
+    _write_json(compiled_file, {"schema_version": "flowcompile.compiled.v2", "configs": [{"config_id": "cfg_0000"}]})
+    args = _runtime_args(
+        query="Solve 1+1",
+        compiled=str(compiled_file),
+        strategy="preference",
+        budget="ultra",
+    )
+    with pytest.raises(SystemExit, match="--budget must be one of low, medium, high, xhigh, or a float between 0.0 and 1.0"):
+        cli.cmd_runtime_infer(args, {})
+
+
+def test_runtime_infer_rejects_out_of_range_budget_value(tmp_path: Path):
+    compiled_file = tmp_path / "compiled_configs.json"
+    _write_json(compiled_file, {"schema_version": "flowcompile.compiled.v2", "configs": [{"config_id": "cfg_0000"}]})
+    args = _runtime_args(
+        query="Solve 1+1",
+        compiled=str(compiled_file),
+        strategy="preference",
+        budget="1.5",
+    )
+    with pytest.raises(SystemExit, match="--budget must be between 0.0 and 1.0"):
+        cli.cmd_runtime_infer(args, {})
