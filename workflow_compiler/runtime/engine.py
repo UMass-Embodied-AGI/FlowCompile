@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Dict, Any, List, Tuple, Optional
 from pathlib import Path
 import asyncio
+import time
 
 from workflow_compiler.core.llm.config import build_setting
 from workflow_compiler.dsl.runtime import run_dsl_query
@@ -78,13 +79,16 @@ async def run_query(
 
     # DSL runtime path for supported workflows
     if workflow_type in ("math", "gsm8k", "hotpotqa", "livecodebench"):
+        start_time = time.perf_counter()
         output = await run_dsl_query(query, config, workflow_type, run_dir)
+        elapsed_seconds = time.perf_counter() - start_time
         return {
             "query_id": str(query_id),
             "output": output,
             "structure_id": structure_id,
             "config_id": config.get("config_id"),
             "output_dir": str(run_dir),
+            "actual_runtime_seconds": elapsed_seconds,
         }
 
     raise ValueError(f"Unsupported workflow_type: {workflow_type}")

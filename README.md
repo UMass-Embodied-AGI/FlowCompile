@@ -219,6 +219,27 @@ flowcompile --config "$CONFIG" runtime infer \
   --query-id "q1"
 ```
 
+Single-query output is now human-readable and includes the selected config, sub-agent settings, final workflow output, and measured wall-clock runtime. Example:
+
+```text
+Used Config
+  Config ID: cfg_0019
+  Structure ID: s__programmer-c0__refine_solver-c0__detailed_solver-c0__generate_solver-c2__sc_ensemble-c1
+  Sub-agents:
+    generate_solver: setting=qwen3-1.7b_budget_10, model=qwen3-1.7b, budget=10
+    sc_ensemble: setting=qwen3-8b_budget_10, model=qwen3-8b, budget=10
+
+Workflow Output
+  2
+
+Actual Runtime
+  4.237s
+
+Metadata
+  Query ID: q1
+  Output Dir: results/math500/runtime/outputs/q1
+```
+
 Batch constraint routing:
 
 ```bash
@@ -227,6 +248,8 @@ flowcompile --config "$CONFIG" runtime infer \
   --strategy constraint \
   --min-accuracy 0.9
 ```
+
+Batch mode behavior is unchanged: results are written to `runtime_results.jsonl`. The printed actual runtime in single-query mode is direct wall-clock execution time, not predicted latency from compiled metrics.
 
 Constraint strategy selection behavior:
 - `--min-accuracy`: choose the lowest-accuracy config that still satisfies the threshold.

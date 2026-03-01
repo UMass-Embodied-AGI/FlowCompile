@@ -211,6 +211,64 @@ def _arg_get(args: Any, name: str, default: Any = None) -> Any:
     return getattr(args, name, default)
 
 
+def _format_runtime_agent_setting(agent_info: Dict[str, Any]) -> str:
+    if not isinstance(agent_info, dict):
+        return "unconfigured"
+
+    parts: List[str] = []
+    setting = agent_info.get("setting")
+    model = agent_info.get("model")
+    budget = agent_info.get("budget")
+
+    if setting not in (None, ""):
+        parts.append(f"setting={setting}")
+    if model not in (None, ""):
+        parts.append(f"model={model}")
+    if budget not in (None, ""):
+        parts.append(f"budget={budget}")
+
+    return ", ".join(parts) if parts else "unconfigured"
+
+
+def _indent_block(text: str, prefix: str = "  ") -> str:
+    lines = str(text).splitlines() or [""]
+    return "\n".join(f"{prefix}{line}" for line in lines)
+
+
+def _print_runtime_infer_single(result: Dict[str, Any]) -> None:
+    selected_config = result.get("selected_config") or {}
+    agents = selected_config.get("agents") or {}
+    workflow_output = result.get("workflow_output", result.get("answer", ""))
+    actual_runtime = result.get("actual_runtime_seconds")
+
+    lines: List[str] = [
+        "Used Config",
+        f"  Config ID: {result.get('config_id') or selected_config.get('config_id', '')}",
+        f"  Structure ID: {result.get('structure_id') or selected_config.get('structure_id', '')}",
+    ]
+
+    if agents:
+        lines.append("  Sub-agents:")
+        for agent_name, agent_info in agents.items():
+            lines.append(f"    {agent_name}: {_format_runtime_agent_setting(agent_info)}")
+    else:
+        lines.append("  Sub-agents: none")
+
+    lines.extend([
+        "",
+        "Workflow Output",
+        _indent_block("" if workflow_output is None else str(workflow_output)),
+        "",
+        "Actual Runtime",
+        f"  {float(actual_runtime):.3f}s" if actual_runtime is not None else "  unavailable",
+        "",
+        "Metadata",
+        f"  Query ID: {result.get('query_id', '')}",
+        f"  Output Dir: {result.get('output_dir', '')}",
+    ])
+    print("\n".join(lines))
+
+
 def _run_correlation_experiment(args: List[str]) -> int:
     from workflow_compiler.experiments.correlation import main as correlation_main
 
@@ -1057,7 +1115,7 @@ def cmd_runtime_infer(args, cfg):
             max_latency=max_lat,
             query_id=args.query_id,
         )
-        print(json.dumps(result, ensure_ascii=False))
+        _print_runtime_infer_single(result)
         return 0
 
     queries = _load_queries(queries_path)

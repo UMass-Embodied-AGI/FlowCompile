@@ -198,7 +198,7 @@ def test_compile_predict_rejects_noncanonical_latency_path(monkeypatch, tmp_path
         cli.cmd_compile_predict(args, cfg)
 
 
-def test_runtime_infer_single_query_prints_json(monkeypatch, tmp_path: Path, capsys):
+def test_runtime_infer_single_query_prints_human_readable_summary(monkeypatch, tmp_path: Path, capsys):
     monkeypatch.chdir(tmp_path)
     compiled_file = tmp_path / "compiled_configs.json"
     _write_json(compiled_file, {"schema_version": "flowcompile.compiled.v2", "configs": [{"config_id": "cfg_0000"}]})
@@ -208,8 +208,25 @@ def test_runtime_infer_single_query_prints_json(monkeypatch, tmp_path: Path, cap
         assert kwargs["query_id"] == "q1"
         return {
             "query": {"id": "q1", "problem": "Solve 1+1"},
-            "selected_config": {"config_id": "cfg_0000"},
+            "selected_config": {
+                "config_id": "cfg_0000",
+                "structure_id": "full",
+                "agents": {
+                    "generate_solver": {
+                        "setting": "qwen3-1.7b_budget_10",
+                        "model": "qwen3-1.7b",
+                        "budget": 10,
+                    },
+                    "sc_ensemble": {
+                        "setting": "qwen3-8b_budget_10",
+                        "model": "qwen3-8b",
+                        "budget": 10,
+                    },
+                },
+            },
             "answer": "2",
+            "workflow_output": "2",
+            "actual_runtime_seconds": 4.2374,
             "query_id": "q1",
             "config_id": "cfg_0000",
             "structure_id": "full",
@@ -227,9 +244,59 @@ def test_runtime_infer_single_query_prints_json(monkeypatch, tmp_path: Path, cap
 
     assert cli.cmd_runtime_infer(args, cfg) == 0
     printed = capsys.readouterr().out.strip()
-    payload = json.loads(printed)
+    assert "Used Config" in printed
+    assert "Config ID: cfg_0000" in printed
+    assert "Structure ID: full" in printed
+    assert "Sub-agents:" in printed
+    assert "generate_solver: setting=qwen3-1.7b_budget_10, model=qwen3-1.7b, budget=10" in printed
+    assert "sc_ensemble: setting=qwen3-8b_budget_10, model=qwen3-8b, budget=10" in printed
+    assert "Workflow Output" in printed
+    assert "\n  2\n" in f"\n{printed}\n"
+    assert "Actual Runtime" in printed
+    assert "4.237s" in printed
+    assert "Metadata" in printed
+    assert "Query ID: q1" in printed
+    assert "Output Dir: runtime_outputs/q1" in printed
+
+
+def test_runtime_infer_batch_does_not_print_single_query_summary(monkeypatch, tmp_path: Path, capsys):
+    monkeypatch.chdir(tmp_path)
+    compiled_file = tmp_path / "compiled_configs.json"
+    _write_json(compiled_file, {"schema_version": "flowcompile.compiled.v2", "configs": [{"config_id": "cfg_0000"}]})
+    queries_file = tmp_path / "queries.jsonl"
+    _write_jsonl(queries_file, [{"id": "q1", "problem": "Solve 1+1"}])
+
+    def fake_infer_runtime_batch(**kwargs):
+        return [
+            {
+                "query": {"id": "q1", "problem": "Solve 1+1"},
+                "selected_config": {"config_id": "cfg_0000"},
+                "answer": "2",
+                "query_id": "q1",
+                "config_id": "cfg_0000",
+                "structure_id": "full",
+                "output_dir": "runtime_outputs/q1",
+            }
+        ]
+
+    monkeypatch.setattr(cli, "infer_runtime_batch", fake_infer_runtime_batch)
+
+    args = _runtime_args(
+        queries=str(queries_file),
+        compiled=str(compiled_file),
+    )
+
+    assert cli.cmd_runtime_infer(args, {}) == 0
+    printed = capsys.readouterr().out.strip()
+    assert printed == ""
+    out_file = tmp_path / "runtime_outputs" / "runtime_results.jsonl"
+    assert out_file.exists()
+    lines = out_file.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 1
+    payload = json.loads(lines[0])
     assert payload["answer"] == "2"
-    assert payload["config_id"] == "cfg_0000"
+    assert "workflow_output" not in payload
+    assert "actual_runtime_seconds" not in payload
 
 
 def test_runtime_infer_rejects_query_and_queries_together(tmp_path: Path):
