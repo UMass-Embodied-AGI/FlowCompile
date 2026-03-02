@@ -11,9 +11,51 @@ import json
 import logging
 from typing import Any, Dict, List, Optional, Union
 from pathlib import Path
+
+import pandas as pd
 from tqdm import tqdm
 
+from workflow_compiler.core.llm.config import parse_config
+
 logger = logging.getLogger(__name__)
+
+
+def row_to_runtime_config(
+    row: pd.Series,
+    workflow_type: str,
+    config_id: str,
+) -> Dict[str, Any]:
+    """Convert a workflow config row into the runtime config schema."""
+    agents: Dict[str, Any] = {}
+
+    for col, value in row.items():
+        if not col.endswith("_setting"):
+            continue
+        raw_agent = col[:-len("_setting")]
+        if value is None or pd.isna(value):
+            continue
+        setting = value if isinstance(value, str) else str(value)
+        model, budget = parse_config(setting)
+        agents[raw_agent] = {
+            "setting": setting,
+            "model": model,
+            "budget": budget,
+        }
+
+    return {
+        "config_id": config_id,
+        "workflow_type": workflow_type,
+        "structure_id": row.get("structure_id"),
+        "agents": agents,
+        "metrics": {
+            "expected_accuracy": float(row.get("workflow_accuracy", 0.0)),
+            "expected_latency": float(row.get("workflow_latency", 0.0)),
+        },
+        "pareto": {
+            "is_pareto": bool(row.get("is_pareto", False)),
+            "rank": int(row.get("pareto_rank", 0)),
+        },
+    }
 
 
 def consolidate_validation_data(

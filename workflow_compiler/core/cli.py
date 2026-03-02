@@ -19,6 +19,8 @@ from workflow_compiler.compiler.ground_truth import run_ground_truth
 from workflow_compiler.compiler.agent_dataset import run_agent_dataset
 from workflow_compiler.compiler.profiling import run_profiling
 from workflow_compiler.compiler.validation import run_validation
+from workflow_compiler.routers import get_router
+from workflow_compiler.routers.utils import consolidate_validation_data
 from workflow_compiler.runtime.infer import infer_runtime, infer_runtime_batch
 from workflow_compiler.core.analysis.prediction import parse_search_axes, parse_agent_constraints
 from workflow_compiler.benchmarks import get_benchmark_info
@@ -281,6 +283,7 @@ def _print_runtime_infer_single(result: Dict[str, Any]) -> None:
     selected_config = result.get("selected_config") or {}
     agents = selected_config.get("agents") or {}
     workflow_output = result.get("workflow_output", result.get("answer", ""))
+    routing_runtime = result.get("routing_runtime_seconds")
     actual_runtime = result.get("actual_runtime_seconds")
 
     lines: List[str] = [
@@ -297,6 +300,9 @@ def _print_runtime_infer_single(result: Dict[str, Any]) -> None:
         lines.append("  Sub-agents: none")
 
     lines.extend([
+        "",
+        "Routing Runtime",
+        f"  {float(routing_runtime):.3f}s" if routing_runtime is not None else "  unavailable",
         "",
         "Workflow Output",
         _indent_block("" if workflow_output is None else str(workflow_output)),
@@ -318,10 +324,15 @@ def _run_correlation_experiment(args: List[str]) -> int:
 
 
 def _load_compiled_configs(path: str) -> List[Dict[str, Any]]:
+    data = _load_compiled_payload(path)
+    return data.get("configs", [])
+
+
+def _load_compiled_payload(path: str) -> Dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
     if isinstance(data, dict) and data.get("schema_version") == "flowcompile.compiled.v2":
-        return data.get("configs", [])
+        return data
     if isinstance(data, dict) and data.get("schema_version") == "flowcompile.compiled.v1":
         raise SystemExit(
             "Unsupported compiled schema flowcompile.compiled.v1. "
@@ -333,10 +344,10 @@ def _load_compiled_configs(path: str) -> List[Dict[str, Any]]:
             "Recompile to flowcompile.compiled.v2 flat `configs`."
         )
     if isinstance(data, list):
-        return data
+        return {"configs": data}
     if isinstance(data, dict) and "configs" in data:
-        return data.get("configs", [])
-    return []
+        return data
+    return {"configs": []}
 
 
 def _load_queries(path: str) -> List[Dict[str, Any]]:
@@ -348,6 +359,22 @@ def _load_queries(path: str) -> List[Dict[str, Any]]:
                 continue
             queries.append(json.loads(line))
     return queries
+
+
+def _merge_search_space(
+    preferred: Optional[Dict[str, Any]],
+    fallback: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    if preferred is None:
+        return fallback
+    if fallback is None:
+        return preferred
+
+    merged = dict(fallback)
+    for key, value in preferred.items():
+        if value not in (None, [], {}):
+            merged[key] = value
+    return merged
 
 
 def _as_list(value: Any) -> Optional[List[Any]]:
@@ -603,6 +630,107 @@ def _resolve_required_input_list(
     raise SystemExit(
         f"{label} not found. Checked canonical patterns {canonical_patterns or []} and fallback patterns {fallback_patterns or []}."
     )
+
+
+def _build_runtime_knn_router(
+    args: Any,
+    cfg: Dict[str, Any],
+    *,
+    workflow_type: str,
+    compiled_payload: Optional[Dict[str, Any]],
+    output_dir: Path,
+):
+    experiment_id = _experiment_id_from_cfg(cfg)
+    root = _exp_root(experiment_id) if experiment_id else None
+    metadata = compiled_payload.get("metadata", {}) if isinstance(compiled_payload, dict) else {}
+    runtime_cfg = _cfg_get(cfg, "runtime", default={})
+
+    detailed_results: Optional[List[str]] = None
+    if root is not None:
+        detailed_results = _resolve_required_input_list(
+            "detailed_results",
+            explicit_values=None,
+            canonical_patterns=[str(root / "01_profile" / "benchmark_*" / "detailed_results.json")],
+            fallback_patterns=[
+                str(root / "benchmark_*" / "detailed_results.json"),
+                str(root / "data" / "benchmark_*" / "detailed_results.json"),
+            ],
+        )
+    elif metadata.get("detailed_results"):
+        detailed_results = list(metadata.get("detailed_results", []))
+
+    trace_data: Optional[str] = None
+    if root is not None:
+        trace_data = _resolve_required_input_path(
+            "trace_data",
+            explicit_value=None,
+            canonical_path=str(root / "01_profile" / "aggregated_training_data.json"),
+            detect_patterns=[
+                str(root / "01_profile" / "*training_data.json"),
+                str(root / "data" / "*training_data.json"),
+                str(root / "*dsl_agent*" / "trace_training_data.json"),
+            ],
+        )
+    elif metadata.get("trace_data"):
+        trace_data = str(metadata.get("trace_data"))
+
+    latency_file: Optional[str] = None
+    if experiment_id:
+        latency_file = _resolve_canonical_latency_file(
+            experiment_id,
+            explicit_value=None,
+            label="latency_file",
+        )
+    elif metadata.get("latency_file"):
+        latency_file = str(metadata.get("latency_file"))
+
+    validate_file = _cfg_flat_get(cfg, "validate_file") or runtime_cfg.get("validate_file")
+    if validate_file:
+        validate_file = resolve_existing_path(validate_file) or str(validate_file)
+
+    search_space = _build_search_space_with_cfg(args, runtime_cfg, cfg=cfg, prefix="runtime")
+    search_space = _merge_search_space(search_space, metadata.get("search_space"))
+
+    missing = [
+        name for name, value in (
+            ("detailed_results", detailed_results),
+            ("trace_data", trace_data),
+            ("latency_file", latency_file),
+            ("validate_file", validate_file),
+            ("search_space", search_space),
+        )
+        if value in (None, [], {})
+    ]
+    if missing:
+        raise SystemExit(
+            "knn-router requires profiling inputs derived from config or compiled metadata. "
+            f"Missing: {', '.join(missing)}."
+        )
+
+    query_data_table = consolidate_validation_data(
+        detailed_results_files=detailed_results,
+        trace_data_file=str(trace_data),
+        latency_file=str(latency_file),
+        workflow_type=workflow_type,
+        data_files=str(validate_file),
+    )
+
+    embedding_cache_file = (
+        str(_exp_root(experiment_id) / "01_profile" / "knn_longformer_embeddings.pkl")
+        if experiment_id
+        else str(output_dir / "knn_longformer_embeddings.pkl")
+    )
+
+    router = get_router(
+        "knn",
+        k=int(getattr(args, "knn_k", 20) or 20),
+        embedding_model="allenai/longformer-base-4096",
+        max_length=4096,
+        search_space=search_space,
+        embedding_cache_file=embedding_cache_file,
+    )
+    router.fit_from_query_table(query_data_table)
+    return router
 
 
 def _benchmark_name_for_workflow(workflow_type: Optional[str]) -> str:
@@ -1126,7 +1254,7 @@ def cmd_runtime_infer(args, cfg):
 
     if not workflow_type:
         raise SystemExit("workflow_type is required")
-    if not compiled:
+    if not compiled and strategy != "knn-router":
         raise SystemExit("compiled is required")
     if strategy is None:
         raise SystemExit("--strategy is required via CLI for runtime infer.")
@@ -1139,6 +1267,11 @@ def cmd_runtime_infer(args, cfg):
             raise SystemExit("--budget is only valid with --strategy preference.")
         if min_acc is None and max_lat is None:
             raise SystemExit("--strategy constraint requires at least one of --min-accuracy or --max-latency.")
+    elif strategy == "knn-router":
+        if budget is None:
+            raise SystemExit("--strategy knn-router requires --budget.")
+        if min_acc is not None or max_lat is not None:
+            raise SystemExit("--min-accuracy/--max-latency are not valid with --strategy knn-router.")
     else:
         if budget is None:
             raise SystemExit("--strategy preference requires --budget.")
@@ -1146,7 +1279,17 @@ def cmd_runtime_infer(args, cfg):
             raise SystemExit("--min-accuracy/--max-latency are only valid with --strategy constraint.")
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    configs = _load_compiled_configs(compiled)
+    compiled_payload = _load_compiled_payload(compiled) if compiled else {"configs": []}
+    configs = compiled_payload.get("configs", [])
+    router = None
+    if strategy == "knn-router":
+        router = _build_runtime_knn_router(
+            args,
+            cfg,
+            workflow_type=workflow_type,
+            compiled_payload=compiled_payload,
+            output_dir=output_dir,
+        )
 
     if single_query:
         result = infer_runtime(
@@ -1159,6 +1302,7 @@ def cmd_runtime_infer(args, cfg):
             min_accuracy=min_acc,
             max_latency=max_lat,
             query_id=args.query_id,
+            router=router,
         )
         _print_runtime_infer_single(result)
         return 0
@@ -1173,6 +1317,7 @@ def cmd_runtime_infer(args, cfg):
         budget=budget,
         min_accuracy=min_acc,
         max_latency=max_lat,
+        router=router,
     )
     out_file = output_dir / "runtime_results.jsonl"
     with open(out_file, "w", encoding="utf-8") as f:
@@ -1365,10 +1510,11 @@ def main():
     inf.add_argument("--queries")
     inf.add_argument("--output-dir")
     inf.add_argument("--workflow-type")
-    inf.add_argument("--strategy", choices=["preference", "constraint"], default=None)
+    inf.add_argument("--strategy", choices=["preference", "constraint", "knn-router"], default=None)
     inf.add_argument("--budget")
     inf.add_argument("--min-accuracy", type=float)
     inf.add_argument("--max-latency", type=float)
+    inf.add_argument("--knn-k", type=int, default=20)
 
     # experiments
     exp = subparsers.add_parser("experiments")

@@ -25,6 +25,7 @@ from pathlib import Path
 from dataclasses import dataclass, field
 
 from . import Router, RoutingResult, register_router
+from .utils import row_to_runtime_config
 from workflow_compiler.workflows.dsl_registry import get_workflow_module
 
 logger = logging.getLogger(__name__)
@@ -297,7 +298,7 @@ class KNNRouter(Router):
     def __init__(
         self,
         name: str = "knn",
-        k: int = 10,
+        k: int = 20,
         embedding_model: str = 'allenai/longformer-base-4096',
         max_length: int = 4096,
         embedding_cache_file: Optional[str] = None,
@@ -343,6 +344,8 @@ class KNNRouter(Router):
         self.knn_index = None
         self.query_id_list: Optional[List[str]] = None
         self.validation_embeddings: Optional[np.ndarray] = None
+        self._full_aggregate_df: Optional[pd.DataFrame] = None
+        self._full_agent_stats_by_workflow: Dict[str, Dict[str, pd.DataFrame]] = {}
         
         logger.info(f"KNNRouter initialized (k={k}, thresholds={accuracy_thresholds})")
     
@@ -376,9 +379,7 @@ class KNNRouter(Router):
             item['query_id']: item
             for item in training_data
         }
-        
-        # Build KNN index
-        self._build_knn_index()
+        self._post_fit_setup()
         
         logger.info(f"Router fitted with {len(self.query_data_table)} queries")
     
@@ -391,8 +392,17 @@ class KNNRouter(Router):
         """
         logger.info(f"Fitting from query table with {len(query_data_table)} queries")
         self.query_data_table = query_data_table
+        self._post_fit_setup()
+
+    def _post_fit_setup(self):
+        if not self.query_data_table:
+            raise ValueError("No query data table available")
+        self._full_aggregate_df = self._aggregate_stats_from_records(
+            self._aggregate_records(list(self.query_data_table.keys()))
+        )
+        self._full_agent_stats_by_workflow = {}
         self._build_knn_index()
-    
+
     def _build_knn_index(self):
         """Build KNN index from validation queries."""
         from sklearn.neighbors import NearestNeighbors
@@ -447,6 +457,68 @@ class KNNRouter(Router):
         self.knn_index.fit(self.validation_embeddings)
         
         logger.info(f"KNN index built with {len(self.query_id_list)} queries")
+
+    @staticmethod
+    def _extract_query_text(query: Dict[str, Any]) -> str:
+        for key in ("query_text", "problem", "question", "question_content", "text"):
+            value = query.get(key)
+            if value not in (None, ""):
+                return str(value)
+        return str(query)
+
+    @staticmethod
+    def _extract_query_id(query: Dict[str, Any]) -> Optional[str]:
+        for key in ("query_id", "id", "unique_id", "_id", "question_id"):
+            value = query.get(key)
+            if value not in (None, ""):
+                return str(value)
+        return None
+
+    def _embed_query_text(self, query_text: str) -> np.ndarray:
+        cached_emb = self.embedding_cache.get(query_text)
+        if cached_emb is not None:
+            return cached_emb
+
+        query_embedding = self.embedder.embed(query_text)
+        self.embedding_cache.put(query_text, query_embedding)
+        self.embedding_cache.save()
+        return query_embedding
+
+    def _get_neighbors(self, query: Dict[str, Any]) -> Tuple[List[str], List[float]]:
+        if self.knn_index is None or not self.query_id_list:
+            raise RuntimeError("Router not fitted. Call fit() first.")
+
+        query_text = self._extract_query_text(query)
+        query_embedding = self._embed_query_text(query_text)
+        distances, indices = self.knn_index.kneighbors(
+            query_embedding.reshape(1, -1),
+            n_neighbors=min(self.k, len(self.query_id_list)),
+        )
+        neighbor_query_ids = [self.query_id_list[idx] for idx in indices[0]]
+        return neighbor_query_ids, distances[0].tolist()
+
+    def build_runtime_candidates(
+        self,
+        query: Dict[str, Any],
+        workflow_type: str,
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        """Return full Pareto frontier runtime candidates for a query."""
+        query_id = self._extract_query_id(query)
+        neighbor_query_ids, neighbor_distances = self._get_neighbors(query)
+        configs, frontier_metadata = self._compute_runtime_frontier(
+            neighbor_query_ids=neighbor_query_ids,
+            workflow_type=workflow_type,
+            query_id=query_id,
+        )
+        metadata = {
+            "method": "knn-router",
+            "k": self.k,
+            "workflow_type": workflow_type,
+            "neighbor_ids": neighbor_query_ids,
+            "neighbor_distances": neighbor_distances,
+        }
+        metadata.update(frontier_metadata)
+        return configs, metadata
     
     def route(
         self,
@@ -469,215 +541,184 @@ class KNNRouter(Router):
         Returns:
             RoutingResult with Pareto optimal configurations
         """
-        if self.knn_index is None:
-            raise RuntimeError("Router not fitted. Call fit() first.")
-        
         if workflow_type is None:
             workflow_type = kwargs.get('workflow_type', 'math')
-        
-        # Extract query text
-        query_text = query.get('query_text') or query.get('problem', '')
-        query_id = query.get('query_id') or query.get('unique_id') or query.get('_id')
-        
-        # Embed query (use cache)
-        cached_emb = self.embedding_cache.get(query_text)
-        if cached_emb is not None:
-            query_embedding = cached_emb
-        else:
-            query_embedding = self.embedder.embed(query_text)
-            self.embedding_cache.put(query_text, query_embedding)
-            self.embedding_cache.save()
-        
-        # Find K nearest neighbors
-        distances, indices = self.knn_index.kneighbors(
-            query_embedding.reshape(1, -1),
-            n_neighbors=min(self.k, len(self.query_id_list))
-        )
-        
-        neighbor_query_ids = [self.query_id_list[idx] for idx in indices[0]]
-        
-        # Compute Pareto frontier from neighbors
-        pareto_configs = self._compute_pareto_frontier(
-            neighbor_query_ids,
-            workflow_type,
-            query_id
-        )
-        
-        # Build ranking
+        configs, metadata = self.build_runtime_candidates(query, workflow_type)
         ranking = [
-            (config.workflow_id, config.expected_accuracy)
-            for config in pareto_configs[:top_k]
+            (config["config_id"], float(config.get("metrics", {}).get("expected_accuracy", 0.0)))
+            for config in configs[:top_k]
         ]
-        
-        metadata = {
-            'method': 'knn',
-            'k': self.k,
-            'workflow_type': workflow_type,
-            'neighbor_ids': neighbor_query_ids,
-            'neighbor_distances': distances[0].tolist(),
-            'pareto_configs': [config.to_dict() for config in pareto_configs],
-            'num_pareto_configs': len(pareto_configs)
-        }
-        
+        metadata["method"] = "knn"
+        metadata["pareto_configs"] = [self._config_to_pareto_summary(config).to_dict() for config in configs]
         return RoutingResult(ranking=ranking, metadata=metadata)
-    
-    def _compute_pareto_frontier(
+
+    def _compute_runtime_frontier(
         self,
         neighbor_query_ids: List[str],
         workflow_type: str,
         query_id: Optional[str] = None
-    ) -> List[ParetoConfiguration]:
-        """
-        Compute Pareto frontier from neighbors.
-        
-        Args:
-            neighbor_query_ids: List of neighbor query IDs
-            workflow_type: Workflow type
-            query_id: Current query ID (for metadata)
-        
-        Returns:
-            List of ParetoConfiguration objects
-        """
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        """Build full Pareto frontier runtime configs from neighbor data."""
         workflow_module = get_workflow_module(workflow_type)
+        agent_dfs, fallback_subagents = self._aggregate_neighbor_data_with_fallback(
+            neighbor_query_ids,
+            workflow_module,
+        )
 
-        # Aggregate neighbor data
-        agent_dfs = self._aggregate_neighbor_data(neighbor_query_ids, workflow_module)
-        
-        # Pre-filter each agent to Pareto optimal configs
-        for df_name in agent_dfs:
-            agent_dfs[df_name] = filter_pareto_optimal(agent_dfs[df_name])
-        
-        metadata = {
-            "search_space": self.search_space,
-        }
+        for agent_name, df in list(agent_dfs.items()):
+            if df is None or df.empty:
+                continue
+            agent_dfs[agent_name] = filter_pareto_optimal(df)
+
+        metadata = {"search_space": self.search_space}
         workflow_df = workflow_module.compute_configs(agent_dfs, metadata)
-
         if workflow_df is None or workflow_df.empty:
-            return []
-        
-        # Find Pareto frontier
+            return [], {
+                "query_id": query_id,
+                "fallback_subagents": sorted(fallback_subagents),
+                "num_pareto_configs": 0,
+            }
+
         costs = np.column_stack([
             workflow_df['workflow_latency'].values,
             -workflow_df['workflow_accuracy'].values
         ])
-        
         pareto_mask = is_pareto_efficient(costs)
-        pareto_df = workflow_df[pareto_mask].sort_values('workflow_latency').reset_index(drop=True)
-        
-        # Select configurations by accuracy threshold
-        pareto_configs = []
-        selected_indices = set()
-        
-        for threshold in sorted(self.accuracy_thresholds, reverse=True):
-            eligible = pareto_df[pareto_df['workflow_accuracy'] >= threshold]
-            
-            if len(eligible) > 0:
-                min_latency_idx = eligible['workflow_latency'].idxmin()
-                
-                if min_latency_idx not in selected_indices:
-                    selected_indices.add(min_latency_idx)
-                    row = pareto_df.loc[min_latency_idx]
-                    
-                    config = self._build_pareto_config(
-                        row, workflow_type, query_id, threshold
-                    )
-                    pareto_configs.append(config)
-        
-        # Add highest accuracy config if not already included
-        if len(pareto_df) > 0 and len(pareto_configs) == 0:
-            row = pareto_df.loc[pareto_df['workflow_accuracy'].idxmax()]
-            config = self._build_pareto_config(row, workflow_type, query_id, None)
-            pareto_configs.append(config)
-        
-        return pareto_configs
-    
-    def _aggregate_neighbor_data(
-        self,
-        neighbor_query_ids: List[str],
-        workflow_module: Any,
-    ) -> Dict[str, pd.DataFrame]:
-        """
-        Aggregate sub-agent performance from neighbors.
-        
-        Args:
-            neighbor_query_ids: List of neighbor query IDs
-            workflow_module: Workflow module used for sub-agent alias normalization
-        
-        Returns:
-            Dict of DataFrames for each sub-agent
-        """
-        # Collect data from all neighbors
-        all_records = []
-        
-        for query_id in neighbor_query_ids:
-            query_data = self.query_data_table[query_id]
-            
-            for agent_name, settings_data in query_data['agents'].items():
+        pareto_df = workflow_df[pareto_mask].sort_values(
+            ['workflow_latency', 'workflow_accuracy'],
+            ascending=[True, False],
+        ).reset_index(drop=True)
+        pareto_df["is_pareto"] = True
+        pareto_df["pareto_rank"] = pareto_df.index + 1
+
+        configs: List[Dict[str, Any]] = []
+        for idx, row in pareto_df.iterrows():
+            config = row_to_runtime_config(row, workflow_type, f"knn_cfg_{idx:04d}")
+            config["router_metadata"] = {
+                "query_id": query_id,
+                "workflow_id": self._format_workflow_id(row, workflow_type),
+            }
+            configs.append(config)
+
+        return configs, {
+            "query_id": query_id,
+            "fallback_subagents": sorted(fallback_subagents),
+            "num_pareto_configs": len(configs),
+        }
+
+    def _aggregate_records(self, query_ids: List[str]) -> pd.DataFrame:
+        all_records: List[Dict[str, Any]] = []
+        for query_id in query_ids:
+            query_data = (self.query_data_table or {}).get(query_id)
+            if not query_data:
+                continue
+            for agent_name, settings_data in query_data.get('agents', {}).items():
                 for setting_name, metrics in settings_data.items():
                     all_records.append({
                         'query_id': query_id,
                         'subagent': agent_name,
                         'setting': setting_name,
                         'accuracy': metrics['accuracy'],
-                        'latency': metrics['latency']
+                        'latency': metrics['latency'],
                     })
-        
-        df = pd.DataFrame(all_records)
-        
-        # Aggregate by subagent and setting
-        df_agg = df.groupby(['subagent', 'setting']).agg({
+        if not all_records:
+            return pd.DataFrame(columns=['query_id', 'subagent', 'setting', 'accuracy', 'latency'])
+        return pd.DataFrame(all_records)
+
+    @staticmethod
+    def _aggregate_stats_from_records(df: pd.DataFrame) -> pd.DataFrame:
+        if df.empty:
+            return pd.DataFrame(columns=['subagent', 'setting', 'accuracy', 'latency'])
+        return df.groupby(['subagent', 'setting']).agg({
             'accuracy': 'mean',
-            'latency': 'mean'
+            'latency': 'mean',
         }).reset_index()
-        
-        # Split by sub-agent and normalize names through workflow aliases.
-        agent_dfs = {
+
+    @staticmethod
+    def _split_agent_dfs(df_agg: pd.DataFrame) -> Dict[str, pd.DataFrame]:
+        if df_agg.empty:
+            return {}
+        return {
             subagent: df_agg[df_agg['subagent'] == subagent][['setting', 'accuracy', 'latency']].reset_index(drop=True)
             for subagent in df_agg['subagent'].unique()
         }
-        return workflow_module.normalize_subagent_stats(agent_dfs)
+
+    def _get_full_agent_stats(
+        self,
+        workflow_type: str,
+        workflow_module: Any,
+    ) -> Dict[str, pd.DataFrame]:
+        cached = self._full_agent_stats_by_workflow.get(workflow_type)
+        if cached is not None:
+            return {key: value.copy() for key, value in cached.items()}
+
+        full_agg = self._full_aggregate_df
+        if full_agg is None:
+            full_agg = self._aggregate_stats_from_records(self._aggregate_records(list((self.query_data_table or {}).keys())))
+            self._full_aggregate_df = full_agg
+
+        full_agent_dfs = workflow_module.normalize_subagent_stats(self._split_agent_dfs(full_agg))
+        self._full_agent_stats_by_workflow[workflow_type] = {
+            key: value.copy() for key, value in full_agent_dfs.items()
+        }
+        return full_agent_dfs
+
+    def _aggregate_neighbor_data_with_fallback(
+        self,
+        neighbor_query_ids: List[str],
+        workflow_module: Any,
+    ) -> Tuple[Dict[str, pd.DataFrame], List[str]]:
+        """Aggregate top-k neighbors with per-agent full-set fallback."""
+        subset_records = self._aggregate_records(neighbor_query_ids)
+        subset_agg = self._aggregate_stats_from_records(subset_records)
+        subset_agent_dfs = workflow_module.normalize_subagent_stats(self._split_agent_dfs(subset_agg))
+        full_agent_dfs = self._get_full_agent_stats(workflow_module.workflow_type, workflow_module)
+
+        required_agents = list(workflow_module.infer_metric_agents())
+        selected_agents: Dict[str, pd.DataFrame] = {}
+        fallback_subagents: List[str] = []
+
+        for agent_name in required_agents:
+            subset_df = subset_agent_dfs.get(agent_name)
+            if subset_df is not None and not subset_df.empty:
+                selected_agents[agent_name] = subset_df.copy()
+                continue
+
+            full_df = full_agent_dfs.get(agent_name)
+            if full_df is not None and not full_df.empty:
+                selected_agents[agent_name] = full_df.copy()
+                fallback_subagents.append(agent_name)
+
+        for agent_name, agent_df in subset_agent_dfs.items():
+            if agent_name not in selected_agents and agent_df is not None and not agent_df.empty:
+                selected_agents[agent_name] = agent_df.copy()
+
+        return selected_agents, fallback_subagents
     
     def _build_pareto_config(
         self,
-        row: pd.Series,
-        workflow_type: str,
-        query_id: Optional[str],
-        accuracy_threshold: Optional[float]
+        config: Dict[str, Any],
     ) -> ParetoConfiguration:
-        """Build ParetoConfiguration from DataFrame row."""
-
-        workflow_params: Dict[str, Any] = {}
-        subagent_settings = {}
-
-        if 'total_branches' in row and pd.notna(row.get('total_branches')):
-            workflow_params['total_branches'] = int(row['total_branches'])
-        if 'is_full' in row and pd.notna(row.get('is_full')):
-            workflow_params['is_full'] = bool(row['is_full'])
-        for col in row.index:
-            if col.endswith('_count') and pd.notna(row[col]):
-                workflow_params[col] = int(row[col])
-
-        for col in row.index:
-            if col.endswith('_setting') and pd.notna(row[col]):
-                agent_name = col.replace('_setting', '')
-                subagent_settings[agent_name] = str(row[col])
-        
-        # Generate workflow ID
-        workflow_id = self._format_workflow_id(row, workflow_type)
-        
+        """Build ParetoConfiguration from a runtime config."""
+        metrics = config.get("metrics", {})
+        agents = config.get("agents", {})
         return ParetoConfiguration(
-            workflow_id=workflow_id,
-            expected_accuracy=float(row['workflow_accuracy']),
-            expected_latency=float(row['workflow_latency']),
-            accuracy_threshold=accuracy_threshold,
-            structure_id=str(row.get('structure_id', '')),
-            workflow_params=workflow_params,
-            subagent_settings=subagent_settings,
-            metadata={
-                'query_id': query_id,
-                'workflow_type': workflow_type
-            }
+            workflow_id=str(config.get("router_metadata", {}).get("workflow_id") or config.get("config_id", "")),
+            expected_accuracy=float(metrics.get("expected_accuracy", 0.0)),
+            expected_latency=float(metrics.get("expected_latency", 0.0)),
+            accuracy_threshold=None,
+            structure_id=str(config.get("structure_id", "")),
+            workflow_params={},
+            subagent_settings={
+                agent_name: str(agent_info.get("setting"))
+                for agent_name, agent_info in agents.items()
+                if agent_info.get("setting") not in (None, "")
+            },
+            metadata=dict(config.get("router_metadata", {})),
         )
+
+    def _config_to_pareto_summary(self, config: Dict[str, Any]) -> ParetoConfiguration:
+        return self._build_pareto_config(config)
     
     def _format_workflow_id(self, row: pd.Series, workflow_type: str) -> str:
         """Format workflow configuration into readable ID string."""
@@ -707,7 +748,8 @@ class KNNRouter(Router):
             'query_data_table': self.query_data_table,
             'validation_embeddings': self.validation_embeddings,
             'query_id_list': self.query_id_list,
-            'config': self.config
+            'config': self.config,
+            'search_space': self.search_space,
         }
         
         with open(save_dir / 'knn_state.pkl', 'wb') as f:
@@ -733,6 +775,11 @@ class KNNRouter(Router):
         self.validation_embeddings = state['validation_embeddings']
         self.query_id_list = state['query_id_list']
         self.config = state.get('config', {})
+        self.search_space = state.get('search_space')
+        self._full_aggregate_df = self._aggregate_stats_from_records(
+            self._aggregate_records(list((self.query_data_table or {}).keys()))
+        )
+        self._full_agent_stats_by_workflow = {}
         
         # Rebuild KNN index
         from sklearn.neighbors import NearestNeighbors

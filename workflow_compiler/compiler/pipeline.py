@@ -12,8 +12,8 @@ import pandas as pd
 from tqdm import tqdm
 
 from workflow_compiler.core.analysis.modeling import filter_pareto_optimal
-from workflow_compiler.core.llm.config import parse_config
 from workflow_compiler.compiler.prep import convert_to_consolidated, build_subagent_stats
+from workflow_compiler.routers.utils import row_to_runtime_config
 from workflow_compiler.workflows.dsl_registry import get_workflow_module
 
 
@@ -158,40 +158,7 @@ def _save_subagent_latency_score_plots(
 
 def _row_to_runtime_config(row: pd.Series, workflow_type: str, workflow_module, config_id: str) -> Dict[str, Any]:
     del workflow_module
-    agents: Dict[str, Any] = {}
-
-    for col, value in row.items():
-        if not col.endswith("_setting"):
-            continue
-        raw_agent = col[:-len("_setting")]
-        # Skip missing settings (e.g., structures that don't use a given agent)
-        if value is None or pd.isna(value):
-            continue
-        setting = value
-        if not isinstance(setting, str):
-            setting = str(setting)
-        model, budget = parse_config(setting)
-        agents[raw_agent] = {
-            "setting": setting,
-            "model": model,
-            "budget": budget,
-        }
-
-    config = {
-        "config_id": config_id,
-        "workflow_type": workflow_type,
-        "structure_id": row.get("structure_id"),
-        "agents": agents,
-        "metrics": {
-            "expected_accuracy": float(row.get("workflow_accuracy", 0.0)),
-            "expected_latency": float(row.get("workflow_latency", 0.0)),
-        },
-        "pareto": {
-            "is_pareto": bool(row.get("is_pareto", False)),
-            "rank": int(row.get("pareto_rank", 0)),
-        },
-    }
-    return config
+    return row_to_runtime_config(row, workflow_type, config_id)
 
 
 def _build_compiled_configs(

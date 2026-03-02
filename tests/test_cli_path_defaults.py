@@ -20,6 +20,11 @@ def _write_jsonl(path: Path, rows):
             f.write(json.dumps(row) + "\n")
 
 
+def _write_text(path: Path, text: str):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
 def _runtime_args(**overrides):
     args = dict(
         query=None,
@@ -32,6 +37,7 @@ def _runtime_args(**overrides):
         budget="0.5",
         min_accuracy=None,
         max_latency=None,
+        knn_k=20,
     )
     args.update(overrides)
     return SimpleNamespace(**args)
@@ -226,6 +232,7 @@ def test_runtime_infer_single_query_prints_human_readable_summary(monkeypatch, t
             },
             "answer": "2",
             "workflow_output": "2",
+            "routing_runtime_seconds": 0.4567,
             "actual_runtime_seconds": 4.2374,
             "query_id": "q1",
             "config_id": "cfg_0000",
@@ -252,6 +259,8 @@ def test_runtime_infer_single_query_prints_human_readable_summary(monkeypatch, t
     assert "sc_ensemble: setting=qwen3-8b_budget_10, model=qwen3-8b, budget=10" in printed
     assert "Workflow Output" in printed
     assert "\n  2\n" in f"\n{printed}\n"
+    assert "Routing Runtime" in printed
+    assert "0.457s" in printed
     assert "Actual Runtime" in printed
     assert "4.237s" in printed
     assert "Metadata" in printed
@@ -272,6 +281,7 @@ def test_runtime_infer_batch_does_not_print_single_query_summary(monkeypatch, tm
                 "query": {"id": "q1", "problem": "Solve 1+1"},
                 "selected_config": {"config_id": "cfg_0000"},
                 "answer": "2",
+                "routing_runtime_seconds": None,
                 "query_id": "q1",
                 "config_id": "cfg_0000",
                 "structure_id": "full",
@@ -295,6 +305,7 @@ def test_runtime_infer_batch_does_not_print_single_query_summary(monkeypatch, tm
     assert len(lines) == 1
     payload = json.loads(lines[0])
     assert payload["answer"] == "2"
+    assert payload["routing_runtime_seconds"] is None
     assert "workflow_output" not in payload
     assert "actual_runtime_seconds" not in payload
 
@@ -522,3 +533,181 @@ def test_runtime_infer_rejects_out_of_range_budget_value(tmp_path: Path):
     )
     with pytest.raises(SystemExit, match="--budget must be between 0.0 and 1.0"):
         cli.cmd_runtime_infer(args, {})
+
+
+def test_runtime_infer_knn_router_requires_budget(tmp_path: Path):
+    args = _runtime_args(
+        query="Solve 1+1",
+        compiled=None,
+        strategy="knn-router",
+        budget=None,
+    )
+    with pytest.raises(SystemExit, match="--strategy knn-router requires --budget"):
+        cli.cmd_runtime_infer(args, {})
+
+
+def test_runtime_infer_knn_router_rejects_constraint_flags(tmp_path: Path):
+    args = _runtime_args(
+        query="Solve 1+1",
+        compiled=None,
+        strategy="knn-router",
+        budget="0.5",
+        max_latency=2.0,
+    )
+    with pytest.raises(SystemExit, match="not valid with --strategy knn-router"):
+        cli.cmd_runtime_infer(args, {})
+
+
+def test_runtime_infer_knn_router_builds_router_from_experiment_defaults(monkeypatch, tmp_path: Path):
+    monkeypatch.chdir(tmp_path)
+    exp = "exp_knn"
+    root = tmp_path / "results" / exp
+    compiled_path = root / "02_compile" / "compiled_configs.json"
+    _write_json(
+        compiled_path,
+        {
+            "schema_version": "flowcompile.compiled.v2",
+            "configs": [],
+            "metadata": {"search_space": {"search_axes": ["budget", "model", "structure"], "budgets": [10]}},
+        },
+    )
+    _write_json(root / "01_profile" / "benchmark_20260212_000000" / "detailed_results.json", {})
+    _write_json(root / "01_profile" / "aggregated_training_data.json", {"training_data": []})
+    _write_json(root / "01_profile" / "latency_benchmark.json", {})
+    _write_jsonl(tmp_path / "data.jsonl", [{"problem": "Solve 1+1", "unique_id": "q1"}])
+    _write_text(
+        tmp_path / "configs" / "config.yaml",
+        "models:\n  qwen3-4b:\n    model: qwen3-4b\n    hf_model_name: Qwen/Qwen3-4B\n",
+    )
+
+    captured = {}
+
+    def fake_consolidate_validation_data(**kwargs):
+        captured["consolidate"] = kwargs
+        return {"q1": {"query_text": "Solve 1+1", "agents": {}}}
+
+    class FakeRouter:
+        def fit_from_query_table(self, query_data_table):
+            captured["fit_from_query_table"] = query_data_table
+
+    def fake_get_router(name, **kwargs):
+        captured["router_name"] = name
+        captured["router_kwargs"] = kwargs
+        return FakeRouter()
+
+    def fake_infer_runtime(**kwargs):
+        captured["infer_runtime"] = kwargs
+        return {
+            "query": {"id": "q1", "problem": "Solve 1+1"},
+            "selected_config": {"config_id": "knn_cfg_0000", "structure_id": "full", "agents": {}},
+            "answer": "2",
+            "workflow_output": "2",
+            "actual_runtime_seconds": 1.0,
+            "query_id": "q1",
+            "config_id": "knn_cfg_0000",
+            "structure_id": "full",
+            "output_dir": "runtime_outputs/q1",
+        }
+
+    monkeypatch.setattr(cli, "consolidate_validation_data", fake_consolidate_validation_data)
+    monkeypatch.setattr(cli, "get_router", fake_get_router)
+    monkeypatch.setattr(cli, "infer_runtime", fake_infer_runtime)
+
+    args = _runtime_args(
+        query="Solve 1+1",
+        query_id="q1",
+        workflow_type=None,
+        strategy="knn-router",
+        budget="0.5",
+        compiled=str(compiled_path),
+        knn_k=20,
+    )
+    cfg = {
+        "schema_version": "flowcompile.flat.v1",
+        "experiment_id": exp,
+        "workflow_type": "math",
+        "dataset": "MATH500",
+        "model_config": "configs/config.yaml",
+        "validate_file": "data.jsonl",
+        "test_file": "test.jsonl",
+        "search_axes": ["model", "budget", "structure"],
+        "search_budgets": [10],
+        "latency_models": ["Qwen/Qwen3-4B"],
+    }
+
+    assert cli.cmd_runtime_infer(args, cfg) == 0
+    assert captured["router_name"] == "knn"
+    assert captured["router_kwargs"]["k"] == 20
+    assert captured["router_kwargs"]["embedding_model"] == "allenai/longformer-base-4096"
+    assert captured["router_kwargs"]["embedding_cache_file"] == f"results/{exp}/01_profile/knn_longformer_embeddings.pkl"
+    assert captured["consolidate"]["detailed_results_files"] == [
+        f"results/{exp}/01_profile/benchmark_20260212_000000/detailed_results.json"
+    ]
+    assert captured["consolidate"]["trace_data_file"] == f"results/{exp}/01_profile/aggregated_training_data.json"
+    assert captured["consolidate"]["latency_file"] == f"results/{exp}/01_profile/latency_benchmark.json"
+    assert captured["consolidate"]["data_files"] == "data.jsonl"
+    assert captured["infer_runtime"]["router"] is not None
+
+
+def test_runtime_infer_knn_router_batch_reuses_single_router(monkeypatch, tmp_path: Path):
+    monkeypatch.chdir(tmp_path)
+    exp = "exp_knn_batch"
+    root = tmp_path / "results" / exp
+    compiled_path = root / "02_compile" / "compiled_configs.json"
+    _write_json(compiled_path, {"schema_version": "flowcompile.compiled.v2", "configs": []})
+    _write_json(root / "01_profile" / "benchmark_20260212_000000" / "detailed_results.json", {})
+    _write_json(root / "01_profile" / "aggregated_training_data.json", {"training_data": []})
+    _write_json(root / "01_profile" / "latency_benchmark.json", {})
+    _write_jsonl(tmp_path / "data.jsonl", [{"problem": "Solve 1+1", "unique_id": "q1"}])
+    queries_path = tmp_path / "queries.jsonl"
+    _write_jsonl(queries_path, [{"id": "q1", "problem": "Solve 1+1"}])
+    _write_text(
+        tmp_path / "configs" / "config.yaml",
+        "models:\n  qwen3-4b:\n    model: qwen3-4b\n    hf_model_name: Qwen/Qwen3-4B\n",
+    )
+
+    captured = {"routers": []}
+
+    def fake_consolidate_validation_data(**kwargs):
+        return {"q1": {"query_text": "Solve 1+1", "agents": {}}}
+
+    class FakeRouter:
+        def fit_from_query_table(self, query_data_table):
+            captured["fit_from_query_table"] = query_data_table
+
+    def fake_get_router(name, **kwargs):
+        router = FakeRouter()
+        captured["routers"].append(router)
+        return router
+
+    def fake_infer_runtime_batch(**kwargs):
+        captured["infer_runtime_batch"] = kwargs
+        return [{"query_id": "q1", "answer": "2"}]
+
+    monkeypatch.setattr(cli, "consolidate_validation_data", fake_consolidate_validation_data)
+    monkeypatch.setattr(cli, "get_router", fake_get_router)
+    monkeypatch.setattr(cli, "infer_runtime_batch", fake_infer_runtime_batch)
+
+    args = _runtime_args(
+        queries=str(queries_path),
+        workflow_type=None,
+        strategy="knn-router",
+        budget="0.5",
+        compiled=str(compiled_path),
+    )
+    cfg = {
+        "schema_version": "flowcompile.flat.v1",
+        "experiment_id": exp,
+        "workflow_type": "math",
+        "dataset": "MATH500",
+        "model_config": "configs/config.yaml",
+        "validate_file": "data.jsonl",
+        "test_file": "test.jsonl",
+        "search_axes": ["model", "budget", "structure"],
+        "search_budgets": [10],
+        "latency_models": ["Qwen/Qwen3-4B"],
+    }
+
+    assert cli.cmd_runtime_infer(args, cfg) == 0
+    assert len(captured["routers"]) == 1
+    assert captured["infer_runtime_batch"]["router"] is captured["routers"][0]
