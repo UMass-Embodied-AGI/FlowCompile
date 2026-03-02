@@ -1,11 +1,45 @@
-# FlowCompile
+<p align="center">
+  <h1 align="center">FlowCompile: Pareto-Optimal Agentic Workflow Compilation</h1>
+  <p align="center">
+    <a href="https://senfu.github.io/">Junyan Li</a>,
+    <a href="https://williamd4112.github.io/">Zhang-Wei Hong</a>,
+    <a href="https://maohaos2.github.io/Maohao/">Maohao Shen</a>,
+    <a href="https://scholar.google.com/citations?user=_-5PSgQAAAAJ&hl=en">Yang Zhang</a>,
+    <a href="https://people.csail.mit.edu/ganchuang">Chuang Gan</a>
+  </p>
+  <p align="center">
+    <a href="">
+      <img src='https://img.shields.io/badge/Paper-PDF-red?style=for-the-badge&logo=arXiv&logoColor=red' alt='Paper PDF'>
+    </a>
+    <a href='' style='padding-left: 0.5rem;'>
+      <img src='https://img.shields.io/badge/Project-Page-blue?style=for-the-badge&logo=Google%20chrome&logoColor=blue' alt='Project Page'>
+    </a>
+    <a href='' style='padding-left: 0.5rem;'>
+      <img src="https://img.shields.io/badge/DOCS-ONLINE-0A9EDC?style=for-the-badge&logo=readthedocs&logoColor=white" alt='Docs'>
+    </a>
+    <a href="LICENSE" style='padding-left: 0.5rem;'><img src="https://img.shields.io/badge/LICENSE-MIT-2EA44F?style=for-the-badge" alt="License"></a>
+  </p>
+</p>
 
-FlowCompile compiles agentic workflows into Pareto-optimal runtime configs by
-profiling sub-agents, estimating workflow-level accuracy/latency, and searching
-over model, budget, and structure choices.
+FlowCompile is an agentic LLM workflow compiler that computes the full accuracy–latency Pareto frontier, enabling principled configuration selection under diverse deployment preferences.
 
-The compiler output is a flat `flowcompile.compiled.v2` config file that runtime
-selection/execution can use directly.
+🚀 **Pareto-Optimal Compilation**  
+Compute the full accuracy–latency Pareto frontier of agentic workflows at compile time.
+
+🧩 **Workflow DSL**  
+Define and compose multi-stage LLM workflows using a PyTorch-like domain-specific language, enabling easy implementation and optimization.
+
+📈 **Preference-Aware Deployment**  
+Select workflow configurations at runtime via multiple strategies, including latency constraints, preference parameters, KNN routing, and more.
+
+🛠️ **Unified CLI**  
+End-to-end command-line interface for profiling, compilation, and inference.
+
+
+## News
+
+- **[2026-03]**: **FlowCompile** is officially released - easily implement, compile, optimize and run agentic workflow with our unified `flowcompile` CLI.
+
 
 ## Contents
 
@@ -17,16 +51,28 @@ selection/execution can use directly.
 - [Experiment](#experiment)
 - [Runtime](#runtime)
 
-## Install
+## Get Started
+
+### Installation
+
+#### Install from source
+
+Clone the repository and install in editable mode using a virtual environment (e.g., with conda):
 
 ```bash
+# Clone the repository
+git clone https://github.com/UMass-Embodied-AGI/FlowCompile.git
+cd FlowCompile
+
+# Create and activate virtual environment
 conda create -n flowcompile python=3.11
 conda activate flowcompile
-pip install -r requirements.txt
+
+# Install the package
 pip install -e .
 ```
 
-## Configure Models
+### Configure Models & API Keys
 
 Create your model config and set API keys/env vars required by your backend.
 
@@ -64,7 +110,9 @@ litellm --config scripts/setup_vllm/litellm_config_1worker1judge.yaml --port 400
    (`base_url: "http://127.0.0.1:4000"`) and use the LiteLLM `master_key` as
    `api_key`.
 
-## Quickstart (YAML Config CLI)
+### CLI Commands
+
+The `flowcompile` CLI is designed for ease of use through a unified configuration file.
 
 Paper benchmark configs are provided in `configs/examples`:
 
@@ -77,7 +125,7 @@ Paper benchmark configs are provided in `configs/examples`:
 2. Run CLI commands with `--config`.
 
 ```bash
-CONFIG=configs/examples/flowcompile_hotpotqa.yaml
+CONFIG=configs/examples/flowcompile_math500.yaml
 
 # 0) Benchmark latency
 flowcompile --config "$CONFIG" get-latency
@@ -102,6 +150,57 @@ flowcompile --config "$CONFIG" run-all
 ```
 
 `run-all` executes `get-latency -> prepare-data -> profile -> predict -> test` in order.
+
+
+### Analysis
+
+We support correlation analysis through our unified CLI. To check the correlation between predicted and actual workflow accuracy/latency:
+
+```bash
+flowcompile --config "$CONFIG" experiments correlation
+```
+
+### Runtime
+
+We support running workflows using compiled configurations directly through our unified CLI. The primary usage is as follows:
+
+```bash
+flowcompile --config "$CONFIG" runtime infer \
+  --query "Solve 1+1" \
+  --strategy preference \
+  --budget 0.5
+```
+
+Named runtime preference budgets (`low`, `medium`, `high` and `xhigh`) are also supported. Example:
+
+```bash
+flowcompile --config "$CONFIG" runtime infer \
+  --query "Solve 1+1" \
+  --strategy preference \
+  --budget high
+```
+
+Single-query output is now human-readable and includes the selected config, sub-agent settings, final workflow output, and measured wall-clock runtime. Example:
+
+```text
+Used Config
+  Config ID: cfg_0019
+  Structure ID: s__programmer-c0__refine_solver-c0__detailed_solver-c0__generate_solver-c2__sc_ensemble-c1
+  Sub-agents:
+    generate_solver: setting=qwen3-1.7b_budget_10, model=qwen3-1.7b, budget=10
+    sc_ensemble: setting=qwen3-8b_budget_10, model=qwen3-8b, budget=10
+
+Workflow Output
+  2
+
+Actual Runtime
+  4.237s
+
+Metadata
+  Query ID: q1
+  Output Dir: results/math500/runtime/outputs/q1
+```
+
 
 ## Add a New Benchmark
 
@@ -176,97 +275,3 @@ PY
 
 Reference:
 - `workflow_compiler/workflows/ADDING_WORKFLOW.md`
-
-## Experiment
-
-The only supported experiment command is correlation analysis.
-To check the correlation between predicted and actual workflow accuracy/latency:
-
-```bash
-flowcompile --config "$CONFIG" experiments correlation
-```
-
-## Runtime
-
-`runtime infer` is config-driven for paths/workflow settings, but routing strategy inputs are CLI-only.
-Primary usage is:
-
-```bash
-flowcompile --config "$CONFIG" runtime infer \
-  --query "Solve 1+1" \
-  --strategy preference \
-  --budget 0.5
-```
-
-`query` / `queries` and runtime routing parameters are always passed via CLI.
-
-Example runtime keys in flat YAML:
-
-```yaml
-# Optional overrides
-runtime_compiled_configs: "results/math500/02_compile/compiled_configs.json"
-runtime_output_dir: "results/math500/runtime/outputs"
-runtime_workflow_type: "math"
-```
-
-Single-query preference routing:
-
-```bash
-flowcompile --config "$CONFIG" runtime infer \
-  --query "Solve 1+1" \
-  --strategy preference \
-  --budget 0.5 \
-  --query-id "q1"
-```
-
-Named runtime preference budgets are also supported:
-
-- `low` = `0.001`
-- `medium` = `0.5`
-- `high` = `0.9`
-- `xhigh` = `0.999`
-
-Example:
-
-```bash
-flowcompile --config "$CONFIG" runtime infer \
-  --query "Solve 1+1" \
-  --strategy preference \
-  --budget high
-```
-
-Single-query output is now human-readable and includes the selected config, sub-agent settings, final workflow output, and measured wall-clock runtime. Example:
-
-```text
-Used Config
-  Config ID: cfg_0019
-  Structure ID: s__programmer-c0__refine_solver-c0__detailed_solver-c0__generate_solver-c2__sc_ensemble-c1
-  Sub-agents:
-    generate_solver: setting=qwen3-1.7b_budget_10, model=qwen3-1.7b, budget=10
-    sc_ensemble: setting=qwen3-8b_budget_10, model=qwen3-8b, budget=10
-
-Workflow Output
-  2
-
-Actual Runtime
-  4.237s
-
-Metadata
-  Query ID: q1
-  Output Dir: results/math500/runtime/outputs/q1
-```
-
-Batch constraint routing:
-
-```bash
-flowcompile --config "$CONFIG" runtime infer \
-  --queries data/math500_validate.jsonl \
-  --strategy constraint \
-  --min-accuracy 0.9
-```
-
-Batch mode behavior is unchanged: results are written to `runtime_results.jsonl`. The printed actual runtime in single-query mode is direct wall-clock execution time, not predicted latency from compiled metrics.
-
-Constraint strategy selection behavior:
-- `--min-accuracy`: choose the lowest-accuracy config that still satisfies the threshold.
-- `--max-latency`: choose the highest-latency config that still satisfies the threshold.
