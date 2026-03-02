@@ -11,7 +11,7 @@
     <a href="">
       <img src='https://img.shields.io/badge/Paper-PDF-red?style=for-the-badge&logo=arXiv&logoColor=red' alt='Paper PDF'>
     </a>
-    <a href='' style='padding-left: 0.5rem;'>
+    <a href="" style='padding-left: 0.5rem;'>
       <img src="https://img.shields.io/badge/DOCS-ONLINE-0A9EDC?style=for-the-badge&logo=readthedocs&logoColor=white" alt='Docs'>
     </a>
     <a href="LICENSE" style='padding-left: 0.5rem;'><img src="https://img.shields.io/badge/LICENSE-MIT-2EA44F?style=for-the-badge" alt="License"></a>
