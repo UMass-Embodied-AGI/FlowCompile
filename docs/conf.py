@@ -56,6 +56,7 @@ nitpick_ignore = [
 ]
 
 autodoc_mock_imports = [
+    "aiofiles",
     "torch",
     "vllm",
     "litellm",
