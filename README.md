@@ -11,7 +11,7 @@
     <a href="">
       <img src='https://img.shields.io/badge/Paper-PDF-red?style=for-the-badge&logo=arXiv&logoColor=red' alt='Paper PDF'>
     </a>
-    <a href="" style='padding-left: 0.5rem;'>
+    <a href="https://umass-embodied-agi.github.io/FlowCompile/" style='padding-left: 0.5rem;'>
       <img src="https://img.shields.io/badge/DOCS-ONLINE-0A9EDC?style=for-the-badge&logo=readthedocs&logoColor=white" alt='Docs'>
     </a>
     <a href="LICENSE" style='padding-left: 0.5rem;'><img src="https://img.shields.io/badge/LICENSE-MIT-2EA44F?style=for-the-badge" alt="License"></a>
@@ -20,17 +20,17 @@
 
 FlowCompile is an agentic LLM workflow compiler that computes the full accuracy–latency Pareto frontier, enabling principled configuration selection under diverse deployment preferences.
 
-🚀 **Pareto-Optimal Compilation**  
-Compute the full accuracy–latency Pareto frontier of agentic workflows at compile time.
+🚀 **Pareto-Optimal Compilation Toolchain**  
+An end-to-end compilation pipeline that profiles sub-agents, searches a unified configuration space, and computes the full accuracy–latency Pareto frontier at compile time.
 
 🧩 **Workflow DSL**  
-Define and compose multi-stage LLM workflows using a PyTorch-like domain-specific language, enabling easy implementation and optimization.
+Specify only the workflow structure using a PyTorch-like domain-specific language, while all profiling, optimization, and compilation are automatically handled by the FlowCompile engine.
 
 📈 **Preference-Aware Deployment**  
 Select workflow configurations at runtime via multiple strategies, including latency constraints, preference parameters, KNN routing, and more.
 
 🛠️ **Unified CLI**  
-End-to-end command-line interface for profiling, compilation, and inference.
+An easy-to-use, end-to-end command-line interface covering profiling, compilation, and inference for every workflow.
 
 
 ## News
@@ -178,7 +178,7 @@ flowcompile --config "$CONFIG" runtime infer \
 
 ## Next Steps
 
-See our docs for further steps on how to create new workflows and optimize them for new tasks.
+To learn how to define custom workflows and optimize them for new tasks, please refer to our [documentation](https://umass-embodied-agi.github.io/FlowCompile/).
 
 
 ## Citation
