@@ -1,0 +1,7 @@
+sphinx
+myst-parser
+furo
+sphinx-copybutton
+pydantic
+PyYAML
+

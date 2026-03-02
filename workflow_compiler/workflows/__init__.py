@@ -83,12 +83,13 @@ _WORKFLOW_REGISTRY: Dict[str, Callable[..., Workflow]] = {}
 def register_workflow(name: str):
     """
     Decorator to register a workflow class.
-    
-    Usage:
+
+    Usage::
+
         @register_workflow("math_solver")
         class MathSolverWorkflow(Workflow):
             ...
-    
+
     Args:
         name: Workflow name for lookup
     """
