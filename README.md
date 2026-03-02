@@ -97,6 +97,15 @@ litellm --config scripts/setup_vllm/litellm_config_1worker1judge.yaml --port 400
    (`base_url: "http://127.0.0.1:4000"`) and use the LiteLLM `master_key` as
    `api_key`.
 
+
+### Prepare Datasets
+
+We provide support for optimization and evaluation on MATH-500, GSM8K, HotpotQA, and LiveCodeBench. The datasets for the first three benchmarks are already included under the `data/` directory. For LiveCodeBench, please run the following command to download and format the dataset:
+
+```bash
+python scripts/create_livecodebench_dataset.py
+```
+
 ### CLI Commands
 
 The `flowcompile` CLI is designed for ease of use through a unified configuration file.
