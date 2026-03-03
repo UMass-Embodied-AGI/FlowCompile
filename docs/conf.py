@@ -85,4 +85,7 @@ html_static_path = ["_static"]
 html_css_files = ["custom.css"]
 html_theme_options = {
     "navigation_with_keys": True,
+    "source_repository": "https://github.com/UMass-Embodied-AGI/FlowCompile",
+    "source_branch": "main",
+    "source_directory": "docs/",
 }
