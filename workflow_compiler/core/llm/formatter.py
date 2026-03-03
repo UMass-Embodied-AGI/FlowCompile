@@ -177,7 +177,7 @@ class CodeFormatter(BaseFormatter):
                 future = executor.submit(sanitize, code=code, entrypoint=self.function_name)
                 sanitized_code = future.result(timeout=10)  # 10 second timeout
             except FuturesTimeoutError:
-                logger.warning("Code sanitization timed out after 10 seconds, returning original code")
+                # logger.warning("Code sanitization timed out after 10 seconds, returning original code")
                 future.cancel()
                 sanitized_code = code
             except Exception as sanitize_error:

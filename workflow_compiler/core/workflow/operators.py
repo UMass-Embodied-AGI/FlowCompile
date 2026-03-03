@@ -233,7 +233,7 @@ class ScEnsemble(Operator):
         for letter, idx in answer_mapping.items():
             solution_answer = self._extract_boxed_answer(solutions[idx])
             if solution_answer and solution_answer == answer:
-                logger.warning(f"Matched answer '{answer}' with solution index {idx} (letter {letter})")
+                # logger.warning(f"Matched answer '{answer}' with solution index {idx} (letter {letter})")
                 return idx
         
         logger.warning(f"No matching solution found for answer: {answer}")

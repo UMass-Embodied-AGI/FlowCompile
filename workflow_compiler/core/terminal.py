@@ -12,14 +12,14 @@ from tqdm import tqdm
 
 
 FLOWCOMPILE_BANNER = r"""
- ______ _                 ____                      _ __
-|  ____| |               / __ \                    (_) /
-| |__  | | _____      __| |  | |___  _ __ ___  _ __ _| | ___
-|  __| | |/ _ \ \ /\ / /| |  | / _ \| '_ ` _ \| '_ \ | |/ _ \
-| |    | | (_) \ V  V / | |__| | (_) | | | | | | |_) | | |  __/
-|_|    |_|\___/ \_/\_/   \____/ \___/|_| |_| |_| .__/|_|_|\___|
-                                               | |
-                                               |_|
+  ______ _                 _____                      _ _      
+ |  ____| |               / ____|                    (_) |     
+ | |__  | | _____      __| |     ___  _ __ ___  _ __  _| | ___ 
+ |  __| | |/ _ \ \ /\ / /| |    / _ \| '_ ` _ \| '_ \| | |/ _ \
+ | |    | | (_) \ V  V / | |___| (_) | | | | | | |_) | | |  __/
+ |_|    |_|\___/ \_/\_/   \_____\___/|_| |_| |_| .__/|_|_|\___|
+                                               | |             
+                                               |_|             
 """
 
 
@@ -63,13 +63,15 @@ class ProgressHandle:
         self._completed = 0
         self._total = total
         if reporter.config.live_progress:
-            self._bar = tqdm(
-                total=total,
-                desc=desc,
-                unit=unit,
-                leave=leave,
-                file=sys.stderr,
-            )
+            tqdm_kwargs = {
+                "total": total,
+                "desc": desc,
+                "leave": leave,
+                "file": sys.stderr,
+            }
+            if unit is not None:
+                tqdm_kwargs["unit"] = unit
+            self._bar = tqdm(**tqdm_kwargs)
         elif desc:
             reporter.step(desc)
 
@@ -129,7 +131,7 @@ class CliReporter:
             return
         self._shared["banner_printed"] = True
         self._write(sys.stderr, FLOWCOMPILE_BANNER.rstrip("\n"))
-        self._write(sys.stderr, "Pareto-optimal agentic workflow compilation")
+        self._write(sys.stderr, "[ FlowCompile ] :: Agentic Workflow Compiler")
 
     def section(self, title: str) -> None:
         if self.config.quiet:
@@ -196,14 +198,15 @@ class CliReporter:
         if iterable is None:
             return ProgressHandle(self, total=total, desc=desc, unit=unit, leave=leave)
         if self.config.live_progress:
-            return tqdm(
-                iterable,
-                total=total,
-                desc=desc,
-                unit=unit,
-                leave=leave,
-                file=sys.stderr,
-            )
+            tqdm_kwargs = {
+                "total": total,
+                "desc": desc,
+                "leave": leave,
+                "file": sys.stderr,
+            }
+            if unit is not None:
+                tqdm_kwargs["unit"] = unit
+            return tqdm(iterable, **tqdm_kwargs)
         if desc and not self.config.quiet:
             self.step(desc)
         return iterable

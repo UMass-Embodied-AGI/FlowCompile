@@ -57,7 +57,7 @@ _REQUIRED_FLAT_KEYS = {
     "search_budgets",
 }
 _RUNTIME_PREFERENCE_BUDGET_PRESETS = {
-    "low": 0.001,
+    "low": 0.01,
     "medium": 0.5,
     "high": 0.9,
     "xhigh": 0.999,
@@ -1482,7 +1482,7 @@ def cmd_runtime_infer(args, cfg):
         _emit_command_summary(
             "Runtime Infer",
             *_format_runtime_infer_single(result),
-            f"Elapsed: {_format_elapsed(time.perf_counter() - started)}",
+            # f"Elapsed: {_format_elapsed(time.perf_counter() - started)}",
         )
         return 0
 
