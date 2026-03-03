@@ -1,7 +1,6 @@
 sphinx
 myst-parser
-furo
+sphinx-book-theme
 sphinx-copybutton
 pydantic
 PyYAML
-

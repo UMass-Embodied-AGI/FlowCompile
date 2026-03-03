@@ -79,13 +79,18 @@ myst_enable_extensions = [
     "colon_fence",
 ]
 
-html_theme = "furo"
+html_theme = "sphinx_book_theme"
 html_title = f"{project} Documentation"
 html_static_path = ["_static"]
 html_css_files = ["custom.css"]
 html_theme_options = {
-    "navigation_with_keys": True,
-    "source_repository": "https://github.com/UMass-Embodied-AGI/FlowCompile",
-    "source_branch": "main",
-    "source_directory": "docs/",
+    "repository_url": "https://github.com/UMass-Embodied-AGI/FlowCompile",
+    "repository_branch": "main",
+    "path_to_docs": "docs",
+    "use_repository_button": True,
+    "use_edit_page_button": True,
+    "use_issues_button": True,
+    "use_download_button": True,
+    "show_navbar_depth": 2,
+    "show_toc_level": 2,
 }
