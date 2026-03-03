@@ -33,11 +33,6 @@ getting-started/quickstart
 
 guides/cli
 guides/project-structure
-```
-
-```{toctree}
-:maxdepth: 2
-:caption: Extending FlowCompile
 
 extending/benchmarks
 extending/workflows
