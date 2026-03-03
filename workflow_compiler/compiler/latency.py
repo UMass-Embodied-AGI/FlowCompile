@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
+from workflow_compiler.core.terminal import get_reporter
+
 
 def _configure_cuda_multiprocessing() -> None:
     """Force spawn-based multiprocessing for CUDA-safe worker startup."""
@@ -431,19 +433,18 @@ async def measure_batch_openai(
 
 
 def _print_results_table(model: str, prompt_file: str, max_new_tokens: int, results: List[BatchStats]) -> None:
-    print(f"\n=== Throughput Profile for {model} ===")
-    print(f"Model:           {model}")
-    print(f"Prompt file:     {prompt_file}")
-    print(f"Max new tokens:  {max_new_tokens}")
-    print("----------------------------------------------")
+    reporter = get_reporter().child("get-latency")
+    reporter.detail(f"Throughput profile for {model}")
+    reporter.detail(f"Model: {model}")
+    reporter.detail(f"Prompt file: {prompt_file}")
+    reporter.detail(f"Max new tokens: {max_new_tokens}")
     hdr = (
         "Batch  | PromptToks | GenToks | TTFT_avg  TTFT_p95 | "
         "Prefill_s  Decode_s | Prefill tok/s  Decode tok/s"
     )
-    print(hdr)
-    print("-" * len(hdr))
+    reporter.detail(hdr)
     for r in results:
-        print(
+        reporter.detail(
             f"{r.batch_size:5d} |"
             f" {r.total_prompt_tokens:10d} |"
             f" {r.total_generated_tokens:7d} |"
@@ -451,7 +452,6 @@ def _print_results_table(model: str, prompt_file: str, max_new_tokens: int, resu
             f" {r.prefill_time_s:8.3f} {r.decode_time_s:8.3f} |"
             f" {format_float(r.prefill_tok_per_s):>14} {format_float(r.decode_tok_per_s):>13}"
         )
-    print("----------------------------------------------\n")
 
 
 def _save_latency_json(output_json: str, payload: Dict[str, Any]) -> None:
@@ -512,9 +512,11 @@ def _run_latency_benchmark_vllm(
         return results
 
     all_results: Dict[str, Any] = {}
+    reporter = get_reporter().child("get-latency")
     for model in models_list:
         results = asyncio.run(_run_all(model))
         all_results[model] = [vars(r) for r in results]
+        reporter.step(f"Measured {model}")
         _print_results_table(model, prompt_file, max_new_tokens, results)
 
     _save_latency_json(output_json, all_results)
@@ -587,14 +589,16 @@ def _run_latency_benchmark_openai(
                 pass
 
     all_results: Dict[str, Any] = {}
+    reporter = get_reporter().child("get-latency")
     for model in models_list:
         route = resolved[model]
-        print(
-            f"[latency] Measuring via OpenAI endpoint for model '{model}' "
+        reporter.detail(
+            f"Measuring via OpenAI endpoint for model '{model}' "
             f"using request model '{route['request_model']}' @ {route['base_url']}"
         )
         results = asyncio.run(_run_all(model, route))
         all_results[model] = [vars(r) for r in results]
+        reporter.step(f"Measured {model}")
         _print_results_table(model, prompt_file, max_new_tokens, results)
 
     _save_latency_json(output_json, all_results)
@@ -647,8 +651,8 @@ def run_latency_benchmark(
         )
 
     if backend_choice == "auto" and model_config_path and not _cuda_available():
-        print(
-            "[latency] CUDA device unavailable; using OpenAI-compatible backend "
+        get_reporter().child("get-latency").warn(
+            "CUDA device unavailable; using OpenAI-compatible backend "
             f"with model config: {model_config_path}"
         )
         return _run_latency_benchmark_openai(
@@ -677,8 +681,8 @@ def run_latency_benchmark(
         )
     except Exception:
         if backend_choice == "auto" and model_config_path:
-            print(
-                "[latency] Local vLLM latency run failed; retrying with OpenAI-compatible "
+            get_reporter().child("get-latency").warn(
+                "Local vLLM latency run failed; retrying with OpenAI-compatible "
                 f"backend via model config: {model_config_path}"
             )
             return _run_latency_benchmark_openai(

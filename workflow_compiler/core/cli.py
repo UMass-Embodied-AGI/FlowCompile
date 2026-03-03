@@ -5,6 +5,8 @@ import argparse
 import asyncio
 import json
 import re
+import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from types import SimpleNamespace
@@ -25,6 +27,13 @@ from workflow_compiler.runtime.infer import infer_runtime, infer_runtime_batch
 from workflow_compiler.core.analysis.prediction import parse_search_axes, parse_agent_constraints
 from workflow_compiler.benchmarks import get_benchmark_info
 from workflow_compiler.core.data_paths import resolve_existing_path
+from workflow_compiler.core.terminal import (
+    CliOutputConfig,
+    get_reporter,
+    reset_reporter,
+    set_reporter,
+    CliReporter,
+)
 
 
 FLAT_SCHEMA_VERSION = "flowcompile.flat.v1"
@@ -219,6 +228,40 @@ def _arg_get(args: Any, name: str, default: Any = None) -> Any:
     return getattr(args, name, default)
 
 
+def _format_elapsed(elapsed: float) -> str:
+    if elapsed < 1:
+        return f"{elapsed * 1000:.0f}ms"
+    if elapsed < 60:
+        return f"{elapsed:.2f}s"
+    minutes, seconds = divmod(int(elapsed), 60)
+    return f"{minutes}m {seconds}s"
+
+
+def _summary_lines(*lines: Optional[str]) -> List[str]:
+    return [str(line) for line in lines if line not in (None, "")]
+
+
+def _emit_command_summary(title: str, *lines: Optional[str]) -> None:
+    get_reporter().summary(_summary_lines(*lines), title=title)
+
+
+def _read_json(path: Path) -> Dict[str, Any]:
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _capture_call(func, *args, **kwargs):
+    reporter = get_reporter()
+    with reporter.capture_stdout():
+        return func(*args, **kwargs)
+
+
+def _capture_async(coro):
+    reporter = get_reporter()
+    with reporter.capture_stdout():
+        return asyncio.run(coro)
+
+
 def _parse_runtime_preference_budget(value: Any) -> Optional[float]:
     if value is None:
         return None
@@ -279,7 +322,7 @@ def _indent_block(text: str, prefix: str = "  ") -> str:
     return "\n".join(f"{prefix}{line}" for line in lines)
 
 
-def _print_runtime_infer_single(result: Dict[str, Any]) -> None:
+def _format_runtime_infer_single(result: Dict[str, Any]) -> List[str]:
     selected_config = result.get("selected_config") or {}
     agents = selected_config.get("agents") or {}
     workflow_output = result.get("workflow_output", result.get("answer", ""))
@@ -314,7 +357,7 @@ def _print_runtime_infer_single(result: Dict[str, Any]) -> None:
         f"  Query ID: {result.get('query_id', '')}",
         f"  Output Dir: {result.get('output_dir', '')}",
     ])
-    print("\n".join(lines))
+    return lines
 
 
 def _run_correlation_experiment(args: List[str]) -> int:
@@ -752,6 +795,8 @@ def _default_split_path_from_workflow(workflow_type: Optional[str], split: str) 
 
 
 def cmd_compile_ground_truth(args, cfg):
+    reporter = get_reporter().child("ground-truth")
+    started = time.perf_counter()
     gt = _cfg_get(cfg, "compile", "ground_truth", default={})
     task = (
         _arg_get(args, "task")
@@ -769,6 +814,7 @@ def cmd_compile_ground_truth(args, cfg):
         or _cfg_get(cfg, "compile", "experiment_id")
         or "default_experiment"
     )
+    profile_root = _exp_root(experiment_id) / "01_profile"
     file_path = (
         _arg_get(args, "file_path")
         or _cfg_flat_get(cfg, "ground_truth_file")
@@ -814,11 +860,35 @@ def cmd_compile_ground_truth(args, cfg):
         entry_point_file=entry_point_file,
     )
 
-    asyncio.run(run_ground_truth(gt_args))
+    reporter.section(f"Ground truth | task={task} | experiment={experiment_id}")
+    reporter.step(f"Dataset input: {file_path}")
+    if entry_point_file:
+        reporter.detail(f"Entry point file: {entry_point_file}")
+    _capture_async(run_ground_truth(gt_args))
+    summary_path = _find_latest_match(
+        [str(profile_root / "*" / "summary.json"), str(profile_root / "summary.json")],
+        require_file=True,
+    )
+    summary = _read_json(Path(summary_path)) if summary_path else {}
+    metrics = summary.get("metrics", {})
+    output = summary.get("output", {})
+    metric_name = str(metrics.get("metric", "score")).replace("_", " ")
+    _emit_command_summary(
+        "Ground Truth",
+        f"Task: {task}",
+        f"Metric: {metric_name}={metrics.get('score'):.4f}" if isinstance(metrics.get("score"), (int, float)) else None,
+        f"Problems: {metrics.get('total_problems')}" if metrics.get("total_problems") is not None else None,
+        f"Success rate: {metrics.get('success_rate'):.4f}" if isinstance(metrics.get("success_rate"), (int, float)) else None,
+        f"Trace file: {output.get('trace_file')}" if output.get("trace_file") else None,
+        f"Results dir: {output.get('results_dir')}" if output.get("results_dir") else None,
+        f"Elapsed: {_format_elapsed(time.perf_counter() - started)}",
+    )
     return 0
 
 
 def cmd_compile_latency(args, cfg):
+    reporter = get_reporter().child("get-latency")
+    started = time.perf_counter()
     lat = _cfg_get(cfg, "compile", "latency", default={})
     models = _arg_get(args, "models") or _cfg_flat_get(cfg, "latency_models") or lat.get("models")
     experiment_id = _experiment_id_from_cfg(cfg)
@@ -851,7 +921,10 @@ def cmd_compile_latency(args, cfg):
     )
     backend = _arg_get(args, "backend") or _cfg_flat_get(cfg, "latency_backend") or lat.get("backend", "openai")
 
-    run_latency_benchmark(
+    reporter.section(f"Latency benchmark | backend={backend}")
+    reporter.step(f"Models: {', '.join(_as_list(models) or [])}")
+    results = _capture_call(
+        run_latency_benchmark,
         models=models,
         output_json=output_json,
         prompt_file=prompt_file,
@@ -865,16 +938,40 @@ def cmd_compile_latency(args, cfg):
         model_config_path=model_config_path,
         backend=backend,
     )
+    batch_sizes_list = _as_list(batch_sizes) or ([batch_size] if batch_size is not None else [])
+    _emit_command_summary(
+        "Latency Benchmark",
+        f"Models processed: {len(results)}",
+        f"Batch sizes: {', '.join(str(v) for v in batch_sizes_list)}" if batch_sizes_list else None,
+        f"Output JSON: {output_json}",
+        f"Elapsed: {_format_elapsed(time.perf_counter() - started)}",
+    )
     return 0
 
 
 def cmd_compile_prepare_data(args, cfg):
     """Run ground-truth generation and agent-dataset extraction in one step."""
-    cmd_compile_ground_truth(args, cfg)
-    return cmd_compile_agent_dataset(args, cfg)
+    reporter = get_reporter().child("prepare-data")
+    started = time.perf_counter()
+    reporter.section("Prepare data")
+    with reporter.progress(total=2, desc="prepare-data stages", leave=False) as progress:
+        reporter.step("Stage 1/2: ground-truth")
+        cmd_compile_ground_truth(args, cfg)
+        progress.advance()
+        reporter.step("Stage 2/2: agent-dataset")
+        result = cmd_compile_agent_dataset(args, cfg)
+        progress.advance()
+    _emit_command_summary(
+        "Prepare Data",
+        f"Stages: ground-truth, agent-dataset",
+        f"Elapsed: {_format_elapsed(time.perf_counter() - started)}",
+    )
+    return result
 
 
 def cmd_compile_agent_dataset(args, cfg):
+    reporter = get_reporter().child("agent-dataset")
+    started = time.perf_counter()
     ad = _cfg_get(cfg, "compile", "agent_dataset", default={})
     experiment_id = _experiment_id_from_cfg(cfg)
     root = _exp_root(experiment_id) if experiment_id else None
@@ -916,7 +1013,10 @@ def cmd_compile_agent_dataset(args, cfg):
     if not trace_data:
         raise SystemExit("trace_data is required for agent-dataset")
 
-    run_agent_dataset(
+    reporter.section("Agent dataset")
+    reporter.step(f"Trace input: {trace_data}")
+    _capture_call(
+        run_agent_dataset,
         trace_path=trace_data,
         output=output,
         config_path=config_path,
@@ -925,10 +1025,24 @@ def cmd_compile_agent_dataset(args, cfg):
         num_workers=num_workers,
         individual=individual,
     )
+    metadata = {}
+    if output and Path(output).exists():
+        payload = _read_json(Path(output))
+        metadata = payload.get("metadata", {})
+    _emit_command_summary(
+        "Agent Dataset",
+        f"Trace source: {trace_data}",
+        f"High-quality samples: {metadata.get('quality_samples')}" if metadata.get("quality_samples") is not None else None,
+        f"Approved training points: {metadata.get('approved_training_points')}" if metadata.get("approved_training_points") is not None else None,
+        f"Output: {output}" if output else None,
+        f"Elapsed: {_format_elapsed(time.perf_counter() - started)}",
+    )
     return 0
 
 
 def cmd_compile_profile(args, cfg):
+    reporter = get_reporter().child("profile")
+    started = time.perf_counter()
     prof = _cfg_get(cfg, "compile", "profile", default={})
     experiment_id = (
         _arg_get(args, "experiment_id")
@@ -986,7 +1100,9 @@ def cmd_compile_profile(args, cfg):
         livecodebench_validate_file = resolve_existing_path(livecodebench_validate_file) or livecodebench_validate_file
         livecodebench_public_test_file = resolve_existing_path(livecodebench_public_test_file) or livecodebench_public_test_file
 
-    asyncio.run(
+    reporter.section(f"Profile | experiment={experiment_id}")
+    reporter.step(f"Search budgets: {', '.join(str(v) for v in search_budgets or [])}")
+    output_dir = _capture_async(
         run_profiling(
             experiment_id=experiment_id,
             models=models,
@@ -999,10 +1115,24 @@ def cmd_compile_profile(args, cfg):
             livecodebench_public_test_file=livecodebench_public_test_file,
         )
     )
+    summary_path = Path(output_dir) / "summary_statistics.json"
+    detailed_path = Path(output_dir) / "detailed_results.json"
+    summary_stats = _read_json(summary_path) if summary_path.exists() else {}
+    _emit_command_summary(
+        "Profile",
+        f"Agents: {len(summary_stats)}" if isinstance(summary_stats, dict) else None,
+        f"Models: {len(models) if models else None}" if models else None,
+        f"Detailed results: {detailed_path}" if detailed_path.exists() else None,
+        f"Summary stats: {summary_path}" if summary_path.exists() else None,
+        f"Output dir: {output_dir}",
+        f"Elapsed: {_format_elapsed(time.perf_counter() - started)}",
+    )
     return 0
 
 
 def cmd_compile_predict(args, cfg):
+    reporter = get_reporter().child("predict")
+    started = time.perf_counter()
     pred = _cfg_get(cfg, "compile", "predict", default={})
     experiment_id = _cfg_get(cfg, "compile", "experiment_id")
     if experiment_id is None:
@@ -1083,7 +1213,10 @@ def cmd_compile_predict(args, cfg):
     if plot_file is None and root is not None:
         plot_file = str(root / "02_compile" / "figures" / "compiled_latency_vs_score.png")
 
-    compile_pareto(
+    reporter.section(f"Predict | workflow={workflow_type}")
+    reporter.step(f"Detailed results files: {len(detailed_results)}")
+    compiled = _capture_call(
+        compile_pareto,
         workflow_type=workflow_type,
         detailed_results=detailed_results,
         trace_data=trace_data,
@@ -1094,25 +1227,49 @@ def cmd_compile_predict(args, cfg):
         search_space=search_space,
         prune_subagents=prune_subagents,
     )
+    metadata = compiled.get("metadata", {})
+    _emit_command_summary(
+        "Predict",
+        f"Workflow type: {workflow_type}",
+        f"Source records: {metadata.get('source_record_count')}" if metadata.get("source_record_count") is not None else None,
+        f"Workflow candidates: {metadata.get('workflow_candidate_count')}" if metadata.get("workflow_candidate_count") is not None else None,
+        f"Pareto configs: {len(compiled.get('configs', []))}",
+        f"Compiled output: {output_file}",
+        f"Plot: {metadata.get('plot_file') or plot_file}" if (metadata.get("plot_file") or plot_file) else None,
+        f"Elapsed: {_format_elapsed(time.perf_counter() - started)}",
+    )
     return 0
 
 
 def cmd_compile_all(args, cfg):
+    reporter = get_reporter().child("run-all")
+    started = time.perf_counter()
     steps = [
-        cmd_compile_latency,
-        cmd_compile_prepare_data,
-        cmd_compile_profile,
-        cmd_compile_predict,
-        cmd_test,
+        ("get-latency", cmd_compile_latency),
+        ("prepare-data", cmd_compile_prepare_data),
+        ("profile", cmd_compile_profile),
+        ("predict", cmd_compile_predict),
+        ("test", cmd_test),
     ]
-    for step in steps:
-        result = step(args, cfg)
-        if result not in (None, 0):
-            return result
+    reporter.section("Run all")
+    with reporter.progress(total=len(steps), desc="run-all stages", leave=False) as progress:
+        for name, step in steps:
+            reporter.step(f"Stage: {name}")
+            result = step(args, cfg)
+            progress.advance()
+            if result not in (None, 0):
+                return result
+    _emit_command_summary(
+        "Run All",
+        f"Stages completed: {len(steps)}",
+        f"Elapsed: {_format_elapsed(time.perf_counter() - started)}",
+    )
     return 0
 
 
 def cmd_test(args, cfg):
+    reporter = get_reporter().child("test")
+    started = time.perf_counter()
     test_cfg = _cfg_get(cfg, "test", default={})
 
     def pick(name, default=None, flat_key=None):
@@ -1184,10 +1341,28 @@ def cmd_test(args, cfg):
         if ns.pareto_sample_n == 0 or ns.pareto_sample_n < -1:
             raise SystemExit("--pareto-sample-n must be >= 1, or -1 to disable sampling")
 
-    return asyncio.run(run_validation(ns))
+    reporter.section(f"Test | dataset={dataset} | split={split}")
+    reporter.step(f"Compiled configs: {config_file}")
+    _capture_async(run_validation(ns))
+    final_file = Path(output_dir) / "workflow_results_final.json"
+    payload = _read_json(final_file) if final_file.exists() else {}
+    evaluation = payload.get("evaluation_metadata", {})
+    aggregate = evaluation.get("aggregate_statistics", {})
+    _emit_command_summary(
+        "Test",
+        f"Processed: {evaluation.get('total_evaluated')}" if evaluation.get("total_evaluated") is not None else None,
+        f"Evaluated: {evaluation.get('configurations_evaluated')}" if evaluation.get("configurations_evaluated") is not None else None,
+        f"Skipped: {evaluation.get('configurations_skipped')}" if evaluation.get("configurations_skipped") is not None else None,
+        f"Mean accuracy: {aggregate.get('mean_accuracy'):.4f}" if isinstance(aggregate.get("mean_accuracy"), (int, float)) else None,
+        f"Final results: {final_file}" if final_file.exists() else None,
+        f"Elapsed: {_format_elapsed(time.perf_counter() - started)}",
+    )
+    return 0
 
 
 def cmd_runtime_infer(args, cfg):
+    reporter = get_reporter().child("runtime infer")
+    started = time.perf_counter()
     runtime_cfg = _cfg_get(cfg, "runtime", default={})
     experiment_id = _experiment_id_from_cfg(cfg)
     root = _exp_root(experiment_id) if experiment_id else None
@@ -1304,7 +1479,11 @@ def cmd_runtime_infer(args, cfg):
             query_id=args.query_id,
             router=router,
         )
-        _print_runtime_infer_single(result)
+        _emit_command_summary(
+            "Runtime Infer",
+            *_format_runtime_infer_single(result),
+            f"Elapsed: {_format_elapsed(time.perf_counter() - started)}",
+        )
         return 0
 
     queries = _load_queries(queries_path)
@@ -1323,9 +1502,17 @@ def cmd_runtime_infer(args, cfg):
     with open(out_file, "w", encoding="utf-8") as f:
         for item in results:
             f.write(json.dumps(item) + "\n")
+    _emit_command_summary(
+        "Runtime Infer",
+        f"Queries processed: {len(results)}",
+        f"Output file: {out_file}",
+        f"Elapsed: {_format_elapsed(time.perf_counter() - started)}",
+    )
     return 0
 
 def cmd_experiments(args, cfg):
+    reporter = get_reporter().child("experiments")
+    started = time.perf_counter()
     name = args.name
     if name != "correlation":
         raise SystemExit(f"Unknown experiment script '{name}'")
@@ -1389,12 +1576,32 @@ def cmd_experiments(args, cfg):
     if not _has_cli_flag(cmd_args, "--output-dir"):
         cmd_args.extend(["--output-dir", default_output_dir])
 
-    return _run_correlation_experiment(cmd_args)
+    reporter.section(f"Experiments | {name}")
+    result = _capture_call(_run_correlation_experiment, cmd_args)
+    output_dir = Path(cmd_args[cmd_args.index("--output-dir") + 1])
+    workflow_type = _cfg_flat_get(cfg, "workflow_type") or "math"
+    output_file = output_dir / f"correlation_metrics_{workflow_type}.json"
+    payload = _read_json(output_file) if output_file.exists() else {}
+    accuracy = payload.get("accuracy_metrics", {})
+    latency = payload.get("latency_metrics", {})
+    _emit_command_summary(
+        "Experiments Correlation",
+        f"Configs analyzed: {payload.get('num_configs')}" if payload.get("num_configs") is not None else None,
+        f"Accuracy Spearman: {accuracy.get('spearman_rho')}" if accuracy.get("spearman_rho") is not None else None,
+        f"Latency Spearman: {latency.get('spearman_rho')}" if latency.get("spearman_rho") is not None else None,
+        f"Output file: {output_file}" if output_file.exists() else None,
+        f"Elapsed: {_format_elapsed(time.perf_counter() - started)}",
+    )
+    return result
 
 
-def main():
+def main(argv: Optional[List[str]] = None):
     parser = argparse.ArgumentParser(prog="flowcompile")
     parser.add_argument("--config", dest="flow_config", type=str, help="Path to FlowCompile YAML config")
+    parser.add_argument("--verbose", action="store_true", help="Show detailed CLI output.")
+    parser.add_argument("--quiet", action="store_true", help="Show warnings/errors and final summaries only.")
+    parser.add_argument("--plain", action="store_true", help="Disable interactive terminal formatting.")
+    parser.add_argument("--no-banner", action="store_true", help="Suppress the FlowCompile ASCII banner.")
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -1524,40 +1731,57 @@ def main():
     )
     exp.add_argument("extra", nargs=argparse.REMAINDER)
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     cfg = _load_yaml(args.flow_config)
+
+    reporter = CliReporter(
+        CliOutputConfig(
+            verbose=bool(args.verbose),
+            quiet=bool(args.quiet),
+            plain=bool(args.plain),
+            no_banner=bool(args.no_banner),
+            stderr_is_tty=bool(getattr(sys.stderr, "isatty", lambda: False)()),
+            stdout_is_tty=bool(getattr(sys.stdout, "isatty", lambda: False)()),
+        )
+    )
+    token = set_reporter(reporter)
+    reporter.banner()
 
     # Optional: set model config path for LLMs
     models_config_path = _cfg_flat_get(cfg, "model_config") or _cfg_get(cfg, "models", "config_path")
     if models_config_path:
         os.environ["WORKFLOW_COMPILER_CONFIG"] = str(models_config_path)
 
-    if args.command == "get-latency":
-        return cmd_compile_latency(args, cfg)
-    if args.command == "ground-truth":
-        return cmd_compile_ground_truth(args, cfg)
-    if args.command == "agent-dataset":
-        return cmd_compile_agent_dataset(args, cfg)
-    if args.command == "prepare-data":
-        return cmd_compile_prepare_data(args, cfg)
-    if args.command == "profile":
-        return cmd_compile_profile(args, cfg)
-    if args.command == "predict":
-        return cmd_compile_predict(args, cfg)
-    if args.command == "run-all":
-        return cmd_compile_all(args, cfg)
+    try:
+        if args.command == "get-latency":
+            return cmd_compile_latency(args, cfg)
+        if args.command == "ground-truth":
+            return cmd_compile_ground_truth(args, cfg)
+        if args.command == "agent-dataset":
+            return cmd_compile_agent_dataset(args, cfg)
+        if args.command == "prepare-data":
+            return cmd_compile_prepare_data(args, cfg)
+        if args.command == "profile":
+            return cmd_compile_profile(args, cfg)
+        if args.command == "predict":
+            return cmd_compile_predict(args, cfg)
+        if args.command == "run-all":
+            return cmd_compile_all(args, cfg)
 
-    if args.command == "test":
-        return cmd_test(args, cfg)
+        if args.command == "test":
+            return cmd_test(args, cfg)
 
-    if args.command == "runtime":
-        if args.runtime_command == "infer":
-            return cmd_runtime_infer(args, cfg)
+        if args.command == "runtime":
+            if args.runtime_command == "infer":
+                return cmd_runtime_infer(args, cfg)
 
-    if args.command == "experiments":
-        return cmd_experiments(args, cfg)
+        if args.command == "experiments":
+            return cmd_experiments(args, cfg)
 
-    return 0
+        return 0
+    finally:
+        reporter.flush_warning_summary()
+        reset_reporter(token)
 
 
 if __name__ == "__main__":

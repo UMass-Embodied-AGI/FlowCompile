@@ -268,7 +268,7 @@ def test_runtime_infer_single_query_prints_human_readable_summary(monkeypatch, t
     assert "Output Dir: runtime_outputs/q1" in printed
 
 
-def test_runtime_infer_batch_does_not_print_single_query_summary(monkeypatch, tmp_path: Path, capsys):
+def test_runtime_infer_batch_prints_brief_summary(monkeypatch, tmp_path: Path, capsys):
     monkeypatch.chdir(tmp_path)
     compiled_file = tmp_path / "compiled_configs.json"
     _write_json(compiled_file, {"schema_version": "flowcompile.compiled.v2", "configs": [{"config_id": "cfg_0000"}]})
@@ -298,7 +298,9 @@ def test_runtime_infer_batch_does_not_print_single_query_summary(monkeypatch, tm
 
     assert cli.cmd_runtime_infer(args, {}) == 0
     printed = capsys.readouterr().out.strip()
-    assert printed == ""
+    assert "Runtime Infer" in printed
+    assert "Queries processed: 1" in printed
+    assert "runtime_results.jsonl" in printed
     out_file = tmp_path / "runtime_outputs" / "runtime_results.jsonl"
     assert out_file.exists()
     lines = out_file.read_text(encoding="utf-8").strip().splitlines()

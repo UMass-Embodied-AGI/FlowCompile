@@ -20,6 +20,7 @@ from workflow_compiler.workflows.dsl_registry import get_workflow_module
 from workflow_compiler.benchmarks import get_benchmark, get_benchmark_info
 from workflow_compiler.core.logs import logger
 from workflow_compiler.core.data_paths import resolve_existing_path
+from workflow_compiler.core.terminal import get_reporter
 
 _LEGACY_TRACE_FIELDS = {
     "is_correct",
@@ -932,39 +933,34 @@ async def run_validation(args):
     final_file = output_base_dir / "workflow_results_final.json"
     with open(final_file, "w", encoding="utf-8") as f:
         json.dump(final_results, f, indent=2)
-
-    print("\n" + "=" * 80)
-    print("WORKFLOW EVALUATION COMPLETE")
-    print("=" * 80)
-    print(f"Total configurations processed: {len(updated_configs)}")
-    print(f"Configurations evaluated: {evaluated_count}")
-    print(f"Configurations skipped: {skipped_count}")
-    print(f"Output directory: {output_base_dir}")
-    print(f"Final results file: {final_file}")
+    reporter = get_reporter().child("test")
+    reporter.success("Workflow evaluation complete")
+    reporter.detail(f"Total configurations processed: {len(updated_configs)}")
+    reporter.detail(f"Configurations evaluated: {evaluated_count}")
+    reporter.detail(f"Configurations skipped: {skipped_count}")
+    reporter.detail(f"Output directory: {output_base_dir}")
+    reporter.detail(f"Final results file: {final_file}")
 
     if accuracies:
-        print("\nAggregate Statistics:")
         metric_name = benchmark_info_main["metric_name"]
         label = {
             "accuracy": "Accuracy",
             "f1": "F1 Score",
             "pass_at_1": "Pass Rate",
         }.get(metric_name, metric_name)
-        print(f"  Mean {label}: {final_results['evaluation_metadata']['aggregate_statistics']['mean_accuracy']:.4f}")
-        print(
+        reporter.detail(
+            f"Mean {label}: {final_results['evaluation_metadata']['aggregate_statistics']['mean_accuracy']:.4f}"
+        )
+        reporter.detail(
             f"  {label} Range: "
             f"[{final_results['evaluation_metadata']['aggregate_statistics']['min_accuracy']:.4f}, "
             f"{final_results['evaluation_metadata']['aggregate_statistics']['max_accuracy']:.4f}]"
         )
 
-    print("=" * 80)
-
     if parallel_workers > 1:
-        print("\nParallel Execution Summary:")
-        print(f"  Configurations processed: {len(updated_configs)}")
-        print(f"  Configurations evaluated: {evaluated_count}")
-        print(f"  Configurations skipped: {skipped_count}")
-        print(f"  Parallel workers: {parallel_workers}")
-        print(f"  Speedup: ~{min(parallel_workers, evaluated_count)}x (theoretical)")
+        reporter.detail(
+            f"Parallel workers: {parallel_workers} | "
+            f"speedup~{min(parallel_workers, evaluated_count)}x"
+        )
 
-    return 0
+    return final_results

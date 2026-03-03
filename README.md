@@ -119,6 +119,7 @@ Paper benchmark configs are provided in `configs/examples`:
 
 1. Choose one benchmark YAML above and edit it for your experiment.
 2. Run CLI commands with `--config`.
+3. Use `--verbose`, `--quiet`, `--plain`, or `--no-banner` to control the new human-readable terminal output.
 
 ```bash
 CONFIG=configs/examples/flowcompile_math500.yaml
@@ -146,6 +147,14 @@ flowcompile --config "$CONFIG" run-all
 ```
 
 `run-all` executes `get-latency -> prepare-data -> profile -> predict -> test` in order.
+
+Output mode examples:
+
+```bash
+flowcompile --verbose --config "$CONFIG" predict
+flowcompile --plain --config "$CONFIG" run-all
+flowcompile --quiet --config "$CONFIG" test
+```
 
 
 ### Analysis

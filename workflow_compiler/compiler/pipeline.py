@@ -9,9 +9,9 @@ import time
 from datetime import datetime
 
 import pandas as pd
-from tqdm import tqdm
 
 from workflow_compiler.core.analysis.modeling import filter_pareto_optimal
+from workflow_compiler.core.terminal import get_reporter
 from workflow_compiler.compiler.prep import convert_to_consolidated, build_subagent_stats
 from workflow_compiler.routers.utils import row_to_runtime_config
 from workflow_compiler.workflows.dsl_registry import get_workflow_module
@@ -29,7 +29,7 @@ def _save_latency_score_plot(
     try:
         import matplotlib.pyplot as plt
     except Exception as exc:
-        print(f"[compile predict] warning: could not render plot ({exc})")
+        get_reporter().child("predict").warn(f"could not render plot ({exc})")
         return None
 
     plot_df = workflow_df
@@ -93,7 +93,7 @@ def _save_subagent_latency_score_plots(
     try:
         import matplotlib.pyplot as plt
     except Exception as exc:
-        print(f"[compile predict] warning: could not render per-subagent plots ({exc})")
+        get_reporter().child("predict").warn(f"could not render per-subagent plots ({exc})")
         return {}
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -147,7 +147,9 @@ def _save_subagent_latency_score_plots(
             plt.close()
             written[subagent] = str(out_path)
         except Exception as exc:
-            print(f"[compile predict] warning: failed to plot subagent '{subagent}' ({exc})")
+            get_reporter().child("predict").warn(
+                f"failed to plot subagent '{subagent}' ({exc})"
+            )
             try:
                 plt.close()
             except Exception:
@@ -170,6 +172,7 @@ def _build_compiled_configs(
 ) -> Dict[str, Any]:
     if workflow_df.empty:
         return {"configs": []}
+    reporter = get_reporter().child("predict")
 
     pareto_df = filter_pareto_optimal(
         workflow_df,
@@ -186,7 +189,7 @@ def _build_compiled_configs(
     configs: List[Dict[str, Any]] = []
     pareto_iter = pareto_df.iterrows()
     if show_progress:
-        pareto_iter = tqdm(
+        pareto_iter = reporter.progress(
             pareto_iter,
             total=len(pareto_df),
             desc="Formatting Pareto configs",
@@ -206,7 +209,7 @@ def _build_compiled_configs(
         ).reset_index(drop=True)
         all_iter = workflow_df_sorted.iterrows()
         if show_progress:
-            all_iter = tqdm(
+            all_iter = reporter.progress(
                 all_iter,
                 total=len(workflow_df_sorted),
                 desc="Formatting all configs",
@@ -252,9 +255,10 @@ def compile_pareto(
         workflow_type = "math"
     workflow_type = workflow_type.lower()
     workflow_module = get_workflow_module(workflow_type)
+    reporter = get_reporter().child("predict")
 
     start_time = time.perf_counter()
-    print("[compile predict] loading inputs")
+    reporter.step("Loading inputs")
 
     df, _ = convert_to_consolidated(
         detailed_results,
@@ -279,7 +283,7 @@ def compile_pareto(
         "configs": [],
     }
 
-    print("[compile predict] aggregating subagent stats")
+    reporter.step("Aggregating sub-agent stats")
     raw_df_subagents = build_subagent_stats(df)
     df_subagents = workflow_module.normalize_subagent_stats(raw_df_subagents)
     pre_counts = {agent: len(agent_df) for agent, agent_df in df_subagents.items()}
@@ -295,8 +299,8 @@ def compile_pareto(
         df_subagents = pruned_subagents
     post_counts = {agent: len(agent_df) for agent, agent_df in df_subagents.items()}
     if pre_counts:
-        print(
-            "[compile predict] subagent configs "
+        reporter.detail(
+            "subagent configs "
             f"{sum(pre_counts.values())} -> {sum(post_counts.values())} "
             f"(prune_subagents={should_prune})"
         )
@@ -308,14 +312,14 @@ def compile_pareto(
         "show_progress": True,
         "progress_desc": "compile predict configs",
     }
-    print("[compile predict] generating workflow configs")
+    reporter.step("Generating workflow configs")
     workflow_df = workflow_module.compute_configs(df_subagents, metadata)
 
     resolved = workflow_df.attrs.get("search_space_resolved")
     if resolved is not None:
         compiled["metadata"]["search_space_resolved"] = resolved
 
-    print("[compile predict] building compiled config payload")
+    reporter.step("Building compiled config payload")
     pareto_df = pd.DataFrame()
     if workflow_df.empty:
         compiled["configs"] = []
@@ -339,7 +343,7 @@ def compile_pareto(
         if include_all_configs:
             compiled["all_configs"] = compiled_result.get("all_configs", [])
 
-    print("[compile predict] writing output")
+    reporter.step("Writing compiled output")
     output_path = Path(output_file)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
@@ -355,12 +359,12 @@ def compile_pareto(
     updated_metadata = False
     if plot_written:
         compiled["metadata"]["plot_file"] = plot_written
-        print(f"[compile predict] plot saved: {plot_written}")
+        reporter.detail(f"Plot saved: {plot_written}")
         updated_metadata = True
     if subagent_plot_files:
         compiled["metadata"]["subagent_score_latency_plots"] = subagent_plot_files
-        print(
-            "[compile predict] per-subagent plots saved: "
+        reporter.detail(
+            "Per-subagent plots saved: "
             f"{len(subagent_plot_files)} -> {output_path.parent / 'figures'}"
         )
         updated_metadata = True
@@ -369,10 +373,11 @@ def compile_pareto(
             json.dump(compiled, f, indent=2)
 
     elapsed = time.perf_counter() - start_time
-    print(
-        f"[compile predict] done in {elapsed:.2f}s | "
-        f"records={len(df)} | workflow_candidates={len(workflow_df)} | "
-        f"pareto_configs={len(compiled.get('configs', []))}"
+    compiled["metadata"]["source_record_count"] = len(df)
+    compiled["metadata"]["workflow_candidate_count"] = len(workflow_df)
+    compiled["metadata"]["elapsed_seconds"] = elapsed
+    reporter.success(
+        f"Predict finished in {elapsed:.2f}s"
     )
 
     return compiled

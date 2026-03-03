@@ -241,6 +241,41 @@ def test_cli_main_runtime_infer_dispatch(monkeypatch):
     assert captured["args"].query == "Solve 1+1"
 
 
+def test_cli_main_help_is_banner_free(monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["flowcompile", "--help"])
+    with pytest.raises(SystemExit) as excinfo:
+        cli.main()
+    assert excinfo.value.code == 0
+    captured = capsys.readouterr()
+    assert "Pareto-optimal agentic workflow compilation" not in captured.err
+
+
+def test_cli_main_prints_banner_once_for_tty(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "_load_yaml", lambda _path: {})
+    monkeypatch.setattr(cli, "cmd_compile_latency", lambda args, cfg: 0)
+    monkeypatch.setattr("sys.argv", ["flowcompile", "get-latency", "--models", "x", "--output-json", "y"])
+    monkeypatch.setattr("sys.stderr.isatty", lambda: True)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+    assert cli.main() == 0
+    captured = capsys.readouterr()
+    assert "Pareto-optimal agentic workflow compilation" in captured.err
+    assert captured.err.count("Pareto-optimal agentic workflow compilation") == 1
+
+
+def test_cli_main_no_banner_flag_suppresses_banner(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "_load_yaml", lambda _path: {})
+    monkeypatch.setattr(cli, "cmd_compile_latency", lambda args, cfg: 0)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["flowcompile", "--no-banner", "get-latency", "--models", "x", "--output-json", "y"],
+    )
+    monkeypatch.setattr("sys.stderr.isatty", lambda: True)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+    assert cli.main() == 0
+    captured = capsys.readouterr()
+    assert "Pareto-optimal agentic workflow compilation" not in captured.err
+
+
 def test_correlation_module_import_smoke():
     from workflow_compiler.experiments import correlation
 

@@ -11,11 +11,15 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-from scipy import stats
+try:
+    from scipy import stats
+except ImportError:  # pragma: no cover - exercised in lightweight test envs
+    stats = None
 
 from workflow_compiler.core.analysis.reporting import calculate_latency_from_trace
 from workflow_compiler.core.analysis import load_latency_data
 from workflow_compiler.core.llm.config import build_setting
+from workflow_compiler.core.terminal import get_reporter
 
 
 def _as_float(value: Any) -> Optional[float]:
@@ -253,16 +257,16 @@ def analyze_workflow_correlation(
     Returns:
         Dictionary with correlation metrics
     """
+    if stats is None:
+        raise ImportError("scipy is required to run correlation analysis")
     workflow_all_dir = Path(workflow_all_dir)
+    reporter = get_reporter().child("correlation")
     
     if not workflow_all_dir.exists():
         raise FileNotFoundError(f"Workflow directory not found: {workflow_all_dir}")
-    
-    print("\n" + "="*80)
-    print("WORKFLOW CORRELATION ANALYSIS")
-    print("="*80)
-    print(f"Directory: {workflow_all_dir}")
-    print(f"Workflow type: {workflow_type}")
+
+    reporter.step(f"Directory: {workflow_all_dir}")
+    reporter.step(f"Workflow type: {workflow_type}")
     normalized_workflow_type = "math" if workflow_type in {"math500", "gsm8k"} else workflow_type
     
     # Load latency data
@@ -274,8 +278,8 @@ def analyze_workflow_correlation(
     
     if not config_dirs:
         raise FileNotFoundError(f"No config_* directories found in {workflow_all_dir}")
-    
-    print(f"Found {len(config_dirs)} configurations\n")
+
+    reporter.step(f"Found {len(config_dirs)} configurations")
     
     # Collect data from all configs
     configs_data = []
@@ -285,11 +289,11 @@ def analyze_workflow_correlation(
         trace_file = config_dir / 'trace.jsonl'
         
         if not config_results_file.exists():
-            print(f"  WARNING: Skipping {config_dir.name} - no config_results.json")
+            reporter.warn(f"Skipping {config_dir.name} - no config_results.json")
             continue
         
         if not trace_file.exists():
-            print(f"  WARNING: Skipping {config_dir.name} - no trace.jsonl")
+            reporter.warn(f"Skipping {config_dir.name} - no trace.jsonl")
             continue
         
         # Load config results
@@ -307,15 +311,15 @@ def analyze_workflow_correlation(
             config_results, config_data
         )
         if predicted_accuracy is None or predicted_latency is None or actual_accuracy is None:
-            print(
-                f"  WARNING: Skipping {config_dir.name} - missing predicted/actual metrics "
+            reporter.warn(
+                f"Skipping {config_dir.name} - missing predicted/actual metrics "
                 f"(pred_acc={predicted_accuracy}, pred_lat={predicted_latency}, actual={actual_accuracy})"
             )
             continue
 
         llm_configs = _extract_llm_configs(config_results, config_data)
         if not llm_configs:
-            print(f"  WARNING: Skipping {config_dir.name} - missing llm configs")
+            reporter.warn(f"Skipping {config_dir.name} - missing llm configs")
             continue
         
         # Calculate actual latency from trace
@@ -340,8 +344,8 @@ def analyze_workflow_correlation(
     
     if len(configs_data) < 2:
         raise ValueError(f"Need at least 2 valid configs for correlation analysis, found {len(configs_data)}")
-    
-    print(f"Successfully loaded {len(configs_data)} configurations\n")
+
+    reporter.detail(f"Loaded {len(configs_data)} valid configurations")
     
     # Convert to arrays
     predicted_accuracy = np.array([c['predicted_accuracy'] for c in configs_data])
@@ -391,30 +395,6 @@ def analyze_workflow_correlation(
         'configs': configs_data
     }
     
-    # Print results
-    print("="*80)
-    print("RESULTS")
-    print("="*80)
-    print(f"\nNumber of configurations analyzed: {len(configs_data)}")
-    print(f"Calibration optimization: {'ENABLED' if optimize_calibration else 'DISABLED (min/max)'}")
-    print(f"\n{'-'*80}")
-    print("ACCURACY CORRELATION")
-    print(f"{'-'*80}")
-    print(f"  Spearman ρ:         {spearman_acc:.4f} (p={spearman_acc_p:.2e})")
-    print(f"  Pairwise Agreement: {pairwise_acc:.4f} ({pairwise_acc*100:.2f}%)")
-    print(f"  MAE:                {mae_acc:.4f}")
-    print(f"  Calibrated MAE:     {calibrated_mae_acc:.4f} (a={a_acc:.4f}, b={b_acc:.4f})")
-    print(f"  MAPE:               {mape_acc:.2f}%")
-    print(f"\n{'-'*80}")
-    print("LATENCY CORRELATION")
-    print(f"{'-'*80}")
-    print(f"  Spearman ρ:         {spearman_lat:.4f} (p={spearman_lat_p:.2e})")
-    print(f"  Pairwise Agreement: {pairwise_lat:.4f} ({pairwise_lat*100:.2f}%)")
-    print(f"  MAE:                {mae_lat:.4f}s")
-    print(f"  Calibrated MAE:     {calibrated_mae_lat:.4f}s (a={a_lat:.4f}, b={b_lat:.4f})")
-    print(f"  MAPE:               {mape_lat:.2f}%")
-    print(f"\n{'='*80}\n")
-    
     # Save to JSON
     correlation_dir = output_dir if output_dir is not None else _default_output_dir_from_latency(latency_file)
     correlation_dir.mkdir(parents=True, exist_ok=True)
@@ -422,8 +402,7 @@ def analyze_workflow_correlation(
     output_file = correlation_dir / f'correlation_metrics_{workflow_type}.json'
     with open(output_file, 'w') as f:
         json.dump(results, f, indent=2)
-    
-    print(f"Results saved to: {output_file}\n")
+    reporter.detail(f"Results saved to: {output_file}")
     
     return results
 
@@ -478,7 +457,9 @@ Examples:
     
     # Normalize workflow_type: gsm8k uses the same workflow structure as math
     if args.workflow_type == 'gsm8k':
-        print("Note: gsm8k uses the same workflow as math, normalizing workflow_type to 'math'")
+        get_reporter().child("correlation").detail(
+            "gsm8k uses the same workflow as math; normalizing workflow_type to 'math'"
+        )
         args.workflow_type = 'math'
     
     workflow_all_dir = Path(args.workflow_all_results_dir)
