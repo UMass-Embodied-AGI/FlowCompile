@@ -16,3 +16,4 @@ models:
     api_key: "YOUR_PROXY_KEY"
     hf_model_name: "Qwen/Qwen3-4B"
     enable_thinking_budget: true
+    thinking_budget_reasoning_parser: "qwen3"

@@ -16,8 +16,14 @@ import yaml
 import os
 from pathlib import Path
 from typing import Dict, Optional, Any
-from urllib.parse import urlparse
-from transformers import AutoTokenizer
+from workflow_compiler.core.llm.thinking_budget import (
+    DEFAULT_THINKING_BUDGET_CUTOFF_TEXT,
+    DEFAULT_THINKING_BUDGET_REASONING_PARSER,
+    DEFAULT_THINKING_BUDGET_VLLM_ARG_NAME,
+    THINKING_BUDGET_ARG_NAME_ARG_NAME,
+    THINKING_BUDGET_HF_MODEL_ARG_NAME,
+    THINKING_CUTOFF_TEXT_ARG_NAME,
+)
 
 class LLMConfig:
     def __init__(self, config: dict):
@@ -168,8 +174,6 @@ class TokenUsageTracker:
         return None
 
 class AsyncLLM:
-    _TOKENIZER_CACHE: Dict[tuple, Any] = {}
-
     def __init__(self, config, system_msg:str = None):
         """
         Initialize the AsyncLLM with a configuration
@@ -192,6 +196,11 @@ class AsyncLLM:
         # Initialize attributes that may be used across all API types
         self.enable_thinking_budget = False
         self.default_reasoning_effort = None
+        self.thinking_budget_cutoff_text = DEFAULT_THINKING_BUDGET_CUTOFF_TEXT
+        self.thinking_budget_reasoning_parser = (
+            DEFAULT_THINKING_BUDGET_REASONING_PARSER
+        )
+        self.thinking_budget_vllm_arg_name = DEFAULT_THINKING_BUDGET_VLLM_ARG_NAME
         if self.config.api_type == "azure":
             if AsyncAzureOpenAI is None:
                 raise ImportError("AsyncAzureOpenAI is unavailable. Please upgrade the openai package.")
@@ -224,8 +233,21 @@ class AsyncLLM:
             self._request_model = self.config.model
             self.enable_thinking_budget = self.config.raw["enable_thinking_budget"] if hasattr(self.config, 'raw') and "enable_thinking_budget" in self.config.raw else False
             self.default_reasoning_effort = self.config.raw.get("default_reasoning_effort") if hasattr(self.config, 'raw') else None
-            if self.enable_thinking_budget:
-                self.tokenizer = self._load_tokenizer()
+            self.thinking_budget_cutoff_text = (
+                self.config.raw.get("thinking_budget_cutoff_text")
+                if hasattr(self.config, "raw")
+                else None
+            ) or DEFAULT_THINKING_BUDGET_CUTOFF_TEXT
+            self.thinking_budget_reasoning_parser = (
+                self.config.raw.get("thinking_budget_reasoning_parser")
+                if hasattr(self.config, "raw")
+                else None
+            ) or DEFAULT_THINKING_BUDGET_REASONING_PARSER
+            self.thinking_budget_vllm_arg_name = (
+                self.config.raw.get("thinking_budget_vllm_arg_name")
+                if hasattr(self.config, "raw")
+                else None
+            ) or DEFAULT_THINKING_BUDGET_VLLM_ARG_NAME
         else:
             raise ValueError(
                 f"Unsupported api_type '{self.config.api_type}'. Expected 'openai' or 'azure'."
@@ -233,57 +255,6 @@ class AsyncLLM:
         assert system_msg is None, "System message support is deprecated."
         self.sys_msg = system_msg
         self.usage_tracker = TokenUsageTracker()
-
-    def _is_local_backend(self) -> bool:
-        if self.config.api_type != "openai":
-            return False
-        base_url = str(getattr(self.config, "base_url", "") or "")
-        if not base_url:
-            return False
-        parsed = urlparse(base_url)
-        hostname = (parsed.hostname or "").lower()
-        return hostname in {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
-
-    def _load_tokenizer(self):
-        hf_model_name = None
-        if hasattr(self.config, "raw"):
-            hf_model_name = self.config.raw.get("hf_model_name")
-        if not hf_model_name:
-            raise ValueError(
-                "enable_thinking_budget=true requires 'hf_model_name' in model config."
-            )
-
-        force_local_only_env = os.environ.get("FLOWCOMPILE_HF_LOCAL_FILES_ONLY", "").strip().lower()
-        if force_local_only_env in ("1", "true", "yes"):
-            local_files_only = True
-        elif force_local_only_env in ("0", "false", "no"):
-            local_files_only = False
-        else:
-            # Default to local-only for localhost backends to avoid HF Hub rate-limit traffic.
-            local_files_only = self._is_local_backend()
-
-        cache_key = (str(hf_model_name), bool(local_files_only))
-        cached = self._TOKENIZER_CACHE.get(cache_key)
-        if cached is not None:
-            return cached
-
-        kwargs = {"trust_remote_code": True}
-        if local_files_only:
-            kwargs["local_files_only"] = True
-
-        try:
-            tokenizer = AutoTokenizer.from_pretrained(hf_model_name, **kwargs)
-        except Exception as exc:
-            if local_files_only:
-                raise RuntimeError(
-                    f"Failed to load local tokenizer for '{hf_model_name}' with local_files_only=True. "
-                    "Pre-download tokenizer files to HF cache or set FLOWCOMPILE_HF_LOCAL_FILES_ONLY=0 "
-                    "to allow Hub access."
-                ) from exc
-            raise
-
-        self._TOKENIZER_CACHE[cache_key] = tokenizer
-        return tokenizer
 
     async def __call__(self, prompt, return_io_tokens: bool = False, disable_thinking: bool = False):
         message = []
@@ -452,7 +423,6 @@ class AsyncLLM:
             else:
                 return ret
 
-        early_stopping_text = "\n\nConsidering the limited time by the user, I have to give the solution based on the thinking directly now.\n</think>\n\n"
         if not self.enable_thinking_budget:
             raise ValueError("Thinking budget feature is not enabled for this model configuration.")
         message = []
@@ -462,48 +432,46 @@ class AsyncLLM:
                 "role": "system"
             })
         message.append({"role": "user", "content": prompt})
-        prompt = self.tokenizer.apply_chat_template(
-            message,
-            add_generation_prompt=True,
-            enable_thinking=True,
-            tokenize=False,
-        )
-        response1 = await self.aclient.completions.create(
-            model=self._request_model,
-            prompt=prompt,
-            max_tokens=thinking_budget,
-            temperature=self.config.temperature,
-            top_p=self.config.top_p,
-            stop=["</think>"],
-        )
-        input_tokens = getattr(response1.usage, "prompt_tokens", 0) or 0
-        if response1.choices[0].finish_reason == "length":
-            thinking_text = response1.choices[0].text + early_stopping_text
-        else:
-            thinking_text = response1.choices[0].text + "</think>\n\n"
-        prompt2 = prompt + thinking_text
-        response2 = await self.aclient.completions.create(
-            model=self._request_model,
-            prompt=prompt2,
-            temperature=self.config.temperature,
-            top_p=self.config.top_p,
-            max_tokens=16*1024,
-        )
-        final_response = response2.choices[0].text
-        # Track token usage for the last call
-        usage = getattr(response2, "usage", None)
+        vllm_xargs = {
+            self.thinking_budget_vllm_arg_name: int(thinking_budget),
+            THINKING_CUTOFF_TEXT_ARG_NAME: self.thinking_budget_cutoff_text,
+            THINKING_BUDGET_ARG_NAME_ARG_NAME: self.thinking_budget_vllm_arg_name,
+        }
+        hf_model_name = None
+        if hasattr(self.config, "raw"):
+            hf_model_name = self.config.raw.get("hf_model_name")
+        if hf_model_name:
+            vllm_xargs[THINKING_BUDGET_HF_MODEL_ARG_NAME] = hf_model_name
+        try:
+            response = await self.aclient.chat.completions.create(
+                model=self._request_model,
+                messages=message,
+                temperature=self.config.temperature,
+                top_p=self.config.top_p,
+                extra_body={
+                    "chat_template_kwargs": {"enable_thinking": True},
+                    "vllm_xargs": vllm_xargs,
+                },
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                "Integer thinking budgets via vLLM logits processor failed. "
+                "Validate that LiteLLM preserves extra_body.vllm_xargs."
+            ) from exc
+
+        usage = getattr(response, "usage", None)
+        input_tokens = getattr(usage, "prompt_tokens", 0) or 0
         output_tokens = getattr(usage, "completion_tokens", 0) or 0
-        second_input_tokens = getattr(usage, "prompt_tokens", 0) or 0
-        output_tokens = second_input_tokens - input_tokens + output_tokens
         self.usage_tracker.add_usage(
             self._request_model,
             input_tokens,
             output_tokens
         )
+        content = response.choices[0].message.content
+        final_response = content.split("</think>")[-1].strip() if content else ""
         if return_io_tokens:
             return final_response, input_tokens, output_tokens
-        else:
-            return final_response
+        return final_response
 
 
     def get_usage_summary(self):
