@@ -1,0 +1,29 @@
+schema_version: "flowcompile.flat.v1"
+
+experiment_id: "math500_qwen35_4b_vllm"
+workflow_type: "math"
+dataset: "MATH500"
+model_config: "configs/config.qwen35_4b.local.yaml"
+ground_truth_llm: "qwen35-4b-local"
+agent_dataset_model: "qwen35-4b-local"
+
+validate_file: "data/math500_validate.jsonl"
+test_file: "data/math500_test.jsonl"
+
+search_axes: ["model", "budget", "structure"]
+search_budgets: [10]
+min_samples_per_agent: 1
+
+latency_models: ["Qwen/Qwen3.5-4B"]
+latency_backend: "vllm"
+latency_batch_sizes: [1]
+latency_max_new_tokens: 128
+latency_dtype: "half"
+latency_gpu_mem_util: 0.85
+latency_vllm_engine_args:
+  language_model_only: true
+  runner: "generate"
+  limit_mm_per_prompt:
+    image: 0
+    video: 0
+    audio: 0

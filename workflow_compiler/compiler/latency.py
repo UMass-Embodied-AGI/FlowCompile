@@ -147,6 +147,7 @@ async def measure_batch(
     max_new_tokens: int,
     seed: int,
 ) -> BatchStats:
+    SamplingParams, _, _, _ = _require_latency_deps()
     # Tokenizer for counting prompt tokens
     prompt_tok_len = len(tokenizer(prompt_text, add_special_tokens=False).input_ids)
     total_prompt_tokens = prompt_tok_len * batch_size
@@ -472,20 +473,24 @@ def _run_latency_benchmark_vllm(
     tp: int,
     gpu_mem_util: float,
     seed: int,
+    vllm_engine_args: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     SamplingParams, AsyncLLMEngine, AsyncEngineArgs, AutoTokenizer = _require_latency_deps()
 
     async def _run_all(model: str):
         tok = AutoTokenizer.from_pretrained(model, trust_remote_code=True)
+        engine_kwargs: Dict[str, Any] = {
+            "model": model,
+            "dtype": dtype,
+            "tensor_parallel_size": tp,
+            "gpu_memory_utilization": gpu_mem_util,
+            "trust_remote_code": True,
+            "max_model_len": 32 * 1024,
+        }
+        if vllm_engine_args:
+            engine_kwargs.update(vllm_engine_args)
         eng = AsyncLLMEngine.from_engine_args(
-            AsyncEngineArgs(
-                model=model,
-                dtype=dtype,
-                tensor_parallel_size=tp,
-                gpu_memory_utilization=gpu_mem_util,
-                trust_remote_code=True,
-                max_model_len=32 * 1024,
-            )
+            AsyncEngineArgs(**engine_kwargs)
         )
 
         warm_sp = SamplingParams(max_tokens=8, temperature=0.0, top_p=1.0, seed=seed)
@@ -618,6 +623,7 @@ def run_latency_benchmark(
     seed: int = 0,
     model_config_path: Optional[str] = None,
     backend: str = "auto",
+    vllm_engine_args: Optional[Dict[str, Any]] = None,
 ) -> dict:
     with open(prompt_file, "r", encoding="utf-8") as f:
         prompt = f.read().strip()
@@ -678,6 +684,7 @@ def run_latency_benchmark(
             tp=tp,
             gpu_mem_util=gpu_mem_util,
             seed=seed,
+            vllm_engine_args=vllm_engine_args,
         )
     except Exception:
         if backend_choice == "auto" and model_config_path:

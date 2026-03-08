@@ -912,6 +912,7 @@ def cmd_compile_latency(args, cfg):
     gpu_mem_util = gpu_mem_util_arg if gpu_mem_util_arg is not None else _cfg_flat_get(cfg, "latency_gpu_mem_util", lat.get("gpu_mem_util", 0.90))
     seed_arg = _arg_get(args, "seed")
     seed = seed_arg if seed_arg is not None else _cfg_flat_get(cfg, "latency_seed", lat.get("seed", 0))
+    vllm_engine_args = _cfg_flat_get(cfg, "latency_vllm_engine_args") or lat.get("vllm_engine_args")
     model_config_path = (
         _arg_get(args, "model_config_path")
         or _cfg_flat_get(cfg, "latency_model_config_path")
@@ -937,6 +938,7 @@ def cmd_compile_latency(args, cfg):
         seed=seed,
         model_config_path=model_config_path,
         backend=backend,
+        vllm_engine_args=vllm_engine_args,
     )
     batch_sizes_list = _as_list(batch_sizes) or ([batch_size] if batch_size is not None else [])
     _emit_command_summary(

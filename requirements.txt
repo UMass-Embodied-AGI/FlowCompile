@@ -1,7 +1,13 @@
 litellm==1.76.0
 litellm-proxy-extras==0.2.18
 litellm-enterprise==0.1.19
-torch==2.8.0
-vllm==0.11.0
+torch>=2.8.0
+vllm>=0.11.0
 transformers
 datasets
+aiofiles
+matplotlib
+seaborn
+tenacity
+tree-sitter
+tree-sitter-python
