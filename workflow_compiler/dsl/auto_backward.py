@@ -262,6 +262,35 @@ def _collect_candidate_ref_ids_from_full_spec(full_spec: Dict[str, Any]) -> Set[
     return candidate_ids
 
 
+def _node_operator(node: Dict[str, Any], full_node: Optional[Dict[str, Any]]) -> str:
+    for candidate in (node, full_node):
+        if not isinstance(candidate, dict):
+            continue
+        metadata = candidate.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        op = metadata.get("operator")
+        if isinstance(op, str) and op.strip():
+            return op.strip().lower()
+    return "sequential"
+
+
+def _node_local_success_probability(
+    node_id: str,
+    node_by_id: Dict[str, Dict[str, Any]],
+    ctx: Any,
+) -> Any:
+    node = node_by_id.get(node_id)
+    if not isinstance(node, dict):
+        return 0.0
+    node_type = node.get("type")
+    if node_type == "agent":
+        return ctx.acc(str(node.get("name")), 0.0)
+    if node_type in {"tool", "end"}:
+        return 1.0
+    return 1.0
+
+
 def _node_success_probability(
     node_id: str,
     node_by_id: Dict[str, Dict[str, Any]],
@@ -299,20 +328,30 @@ def _node_success_probability(
     single_refs = _unique(_collect_non_list_direct_state_refs(inputs))
 
     input_prob: Any = 1.0
+    operator = _node_operator(node, full_node)
     for ref in single_refs:
         input_prob = input_prob * _node_success_probability(
             ref, node_by_id, full_node_by_id, active_node_ids, ctx, memo, visiting
         )
     for group in groups:
-        fail_prob: Any = 1.0
-        for ref in _unique(group):
-            fail_prob = fail_prob * (
-                1
-                - _node_success_probability(
-                    ref, node_by_id, full_node_by_id, active_node_ids, ctx, memo, visiting
+        refs = _unique(group)
+        if operator in {"map_reduce", "map-reduce", "reduce"}:
+            # For map-reduce operators, list dependencies compose multiplicatively
+            # by stage/operator success, not by ensemble-style OR semantics.
+            group_prob: Any = 1.0
+            for ref in refs:
+                group_prob = group_prob * _node_local_success_probability(ref, node_by_id, ctx)
+            input_prob = input_prob * group_prob
+        else:
+            fail_prob: Any = 1.0
+            for ref in refs:
+                fail_prob = fail_prob * (
+                    1
+                    - _node_success_probability(
+                        ref, node_by_id, full_node_by_id, active_node_ids, ctx, memo, visiting
+                    )
                 )
-            )
-        input_prob = input_prob * (1 - fail_prob)
+            input_prob = input_prob * (1 - fail_prob)
 
     node_type = node.get("type")
     if node_type == "agent":

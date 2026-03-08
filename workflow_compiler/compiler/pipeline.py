@@ -236,6 +236,7 @@ def compile_pareto(
     include_all_configs: bool = False,
     search_space: Optional[Dict[str, Any]] = None,
     prune_subagents: bool = True,
+    openclaw_lobster_workflow_file: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Compile Pareto-optimal workflow configurations.
 
@@ -254,7 +255,10 @@ def compile_pareto(
     if workflow_type.lower() in ["math500", "math-500"]:
         workflow_type = "math"
     workflow_type = workflow_type.lower()
-    workflow_module = get_workflow_module(workflow_type)
+    workflow_module = get_workflow_module(
+        workflow_type,
+        openclaw_lobster_workflow_file=openclaw_lobster_workflow_file,
+    )
     reporter = get_reporter().child("predict")
 
     start_time = time.perf_counter()
@@ -279,6 +283,7 @@ def compile_pareto(
             "latency_file": latency_file,
             "search_space": search_space,
             "prune_subagents": bool(prune_subagents and not include_all_configs),
+            "openclaw_lobster_workflow_file": openclaw_lobster_workflow_file,
         },
         "configs": [],
     }

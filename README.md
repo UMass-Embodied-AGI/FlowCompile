@@ -140,6 +140,24 @@ flowcompile --config "$CONFIG" predict
 flowcompile --config "$CONFIG" test
 ```
 
+For custom OpenClaw Lobster workflows that already have profiling data, you can skip `prepare-data`.
+Set these config keys and run `profile` directly:
+
+- `workflow_type: openclaw_lobster`
+- `openclaw_lobster_workflow_file: <path-to-lobster-yaml>`
+- `profile_training_data: <path-to-training-json>`
+
+Profiling judge policy for Outlook-style OpenClaw agents:
+
+- `classify.category`: strict normalized exact match
+- `summarize_each.summary`, `overview.overview_paragraph`, `ask_questions.question`, `draft_replies.draft_body`: semantic judge (`CORRECT`/`INCORRECT`) after JSON/required-field validation
+- For `draft_replies.draft_body`, the judge checks semantic alignment and instruction adherence using the sample's `raw_llm_prompt`
+
+Expected training sample fields for this path:
+
+- top-level: `{"training_data": [...]}`
+- per sample: `agent_name`, `raw_llm_prompt`, `processed_output` (JSON object string with required field), `raw_llm_output`
+
 Optional end-to-end command:
 
 ```bash

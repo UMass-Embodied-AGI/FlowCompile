@@ -1,7 +1,0 @@
-models:
-  qwen35-4b-local:
-    api_type: "openai"
-    base_url: "http://127.0.0.1:8000/v1"
-    api_key: "EMPTY"
-    model: "Qwen/Qwen3.5-4B"
-    hf_model_name: "Qwen/Qwen3.5-4B"

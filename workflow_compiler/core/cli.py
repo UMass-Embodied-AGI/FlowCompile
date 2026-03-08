@@ -159,9 +159,9 @@ def _validate_flat_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
         raise SystemExit(f"Missing required flat config key(s): {missing}")
 
     workflow_type = str(cfg.get("workflow_type", "")).strip().lower()
-    if workflow_type not in {"math", "gsm8k", "hotpotqa", "livecodebench"}:
+    if workflow_type not in {"math", "gsm8k", "hotpotqa", "livecodebench", "openclaw_lobster"}:
         raise SystemExit(
-            "workflow_type must be one of: math, gsm8k, hotpotqa, livecodebench"
+            "workflow_type must be one of: math, gsm8k, hotpotqa, livecodebench, openclaw_lobster"
         )
 
     cfg.setdefault("ground_truth_llm", "gpt-5-mini")
@@ -1094,6 +1094,23 @@ def cmd_compile_profile(args, cfg):
         or _cfg_get(cfg, "compile", "workflow_type")
         or ""
     )
+    profile_training_data = (
+        _cfg_flat_get(cfg, "profile_training_data")
+        or prof.get("training_data")
+    )
+    openclaw_lobster_workflow_file = (
+        _cfg_flat_get(cfg, "openclaw_lobster_workflow_file")
+        or prof.get("openclaw_lobster_workflow_file")
+    )
+    if str(workflow_type).lower() == "openclaw_lobster":
+        if not openclaw_lobster_workflow_file:
+            raise SystemExit(
+                "openclaw_lobster_workflow_file is required when workflow_type=openclaw_lobster for profile."
+            )
+        if not profile_training_data:
+            raise SystemExit(
+                "profile_training_data is required when workflow_type=openclaw_lobster for profile."
+            )
     livecodebench_validate_file = None
     livecodebench_public_test_file = None
     if str(workflow_type).lower() == "livecodebench":
@@ -1115,6 +1132,9 @@ def cmd_compile_profile(args, cfg):
             min_samples_per_agent=min_samples,
             livecodebench_validate_file=livecodebench_validate_file,
             livecodebench_public_test_file=livecodebench_public_test_file,
+            workflow_type=workflow_type,
+            training_data_path=profile_training_data,
+            openclaw_lobster_workflow_file=openclaw_lobster_workflow_file,
         )
     )
     summary_path = Path(output_dir) / "summary_statistics.json"
@@ -1155,6 +1175,10 @@ def cmd_compile_predict(args, cfg):
     latency_file = _arg_get(args, "latency_file") or _cfg_flat_get(cfg, "predict_latency_file") or pred.get("latency_file")
     output_file = _arg_get(args, "output_file") or _cfg_flat_get(cfg, "predict_output_file") or pred.get("output_file")
     plot_file = _arg_get(args, "plot_file") or _cfg_flat_get(cfg, "predict_plot_file") or pred.get("plot_file")
+    openclaw_lobster_workflow_file = (
+        _cfg_flat_get(cfg, "openclaw_lobster_workflow_file")
+        or pred.get("openclaw_lobster_workflow_file")
+    )
     include_all_arg = _arg_get(args, "include_all")
     include_all = (
         include_all_arg
@@ -1171,6 +1195,10 @@ def cmd_compile_predict(args, cfg):
 
     if not workflow_type:
         raise SystemExit("workflow_type is required")
+    if str(workflow_type).lower() == "openclaw_lobster" and not openclaw_lobster_workflow_file:
+        raise SystemExit(
+            "openclaw_lobster_workflow_file is required when workflow_type=openclaw_lobster for predict."
+        )
 
     if detailed_results:
         detailed_results = _resolve_required_input_list(
@@ -1228,6 +1256,7 @@ def cmd_compile_predict(args, cfg):
         include_all_configs=include_all,
         search_space=search_space,
         prune_subagents=prune_subagents,
+        openclaw_lobster_workflow_file=openclaw_lobster_workflow_file,
     )
     metadata = compiled.get("metadata", {})
     _emit_command_summary(

@@ -3,7 +3,7 @@ schema_version: "flowcompile.flat.v1"
 experiment_id: "math500_qwen35_4b_vllm"
 workflow_type: "math"
 dataset: "MATH500"
-model_config: "configs/config.qwen35_4b.local.yaml"
+model_config: "configs/config.qwen35.local.yaml"
 ground_truth_llm: "qwen35-4b-local"
 agent_dataset_model: "qwen35-4b-local"
 

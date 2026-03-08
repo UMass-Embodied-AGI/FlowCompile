@@ -431,3 +431,85 @@ def test_cmd_compile_profile_prefers_profile_specific_min_samples(monkeypatch):
     cfg = _flat_cfg(min_samples_per_agent=321, profile_min_samples_per_agent=123)
     assert cli.cmd_compile_profile(_empty_profile_args(), cfg) == 0
     assert captured["min_samples_per_agent"] == 123
+
+
+def test_cmd_compile_profile_requires_openclaw_lobster_inputs(monkeypatch):
+    async def fake_run_profiling(**kwargs):  # pragma: no cover - should not be called
+        return Path("results/exp_flat/01_profile/benchmark_00000000_000000")
+
+    monkeypatch.setattr(cli, "run_profiling", fake_run_profiling)
+
+    cfg_missing_workflow = _flat_cfg(
+        workflow_type="openclaw_lobster",
+        profile_training_data="data/outlook_training.json",
+    )
+    with pytest.raises(SystemExit, match="openclaw_lobster_workflow_file is required"):
+        cli.cmd_compile_profile(_empty_profile_args(), cfg_missing_workflow)
+
+    cfg_missing_training = _flat_cfg(
+        workflow_type="openclaw_lobster",
+        openclaw_lobster_workflow_file="workflows/outlook.lobster.yaml",
+    )
+    with pytest.raises(SystemExit, match="profile_training_data is required"):
+        cli.cmd_compile_profile(_empty_profile_args(), cfg_missing_training)
+
+
+def test_cmd_compile_profile_forwards_openclaw_lobster_inputs(monkeypatch):
+    captured = {}
+
+    async def fake_run_profiling(**kwargs):
+        captured.update(kwargs)
+        return Path("results/exp_flat/01_profile/benchmark_00000000_000000")
+
+    monkeypatch.setattr(cli, "run_profiling", fake_run_profiling)
+
+    cfg = _flat_cfg(
+        workflow_type="openclaw_lobster",
+        openclaw_lobster_workflow_file="workflows/outlook.lobster.yaml",
+        profile_training_data="data/outlook_training.json",
+    )
+    assert cli.cmd_compile_profile(_empty_profile_args(), cfg) == 0
+    assert captured["workflow_type"] == "openclaw_lobster"
+    assert captured["openclaw_lobster_workflow_file"] == "workflows/outlook.lobster.yaml"
+    assert captured["training_data_path"] == "data/outlook_training.json"
+
+
+def test_cmd_compile_predict_forwards_openclaw_lobster_workflow_file(monkeypatch, tmp_path: Path):
+    monkeypatch.chdir(tmp_path)
+    exp = "exp_flat"
+    root = tmp_path / "results" / exp / "01_profile"
+    _write_json(root / "benchmark_1" / "detailed_results.json", {})
+    _write_json(root / "aggregated_training_data.json", {"training_data": []})
+    _write_json(root / "latency_benchmark.json", {})
+
+    captured = {}
+
+    def fake_compile_pareto(**kwargs):
+        captured.update(kwargs)
+        return {"configs": [], "metadata": {}}
+
+    monkeypatch.setattr(cli, "compile_pareto", fake_compile_pareto)
+
+    cfg = _flat_cfg(
+        experiment_id=exp,
+        workflow_type="openclaw_lobster",
+        openclaw_lobster_workflow_file="workflows/outlook.lobster.yaml",
+    )
+    assert cli.cmd_compile_predict(_empty_predict_args(), cfg) == 0
+    assert captured["openclaw_lobster_workflow_file"] == "workflows/outlook.lobster.yaml"
+
+
+def test_cmd_compile_predict_requires_openclaw_lobster_workflow_file(monkeypatch, tmp_path: Path):
+    monkeypatch.chdir(tmp_path)
+    exp = "exp_flat"
+    root = tmp_path / "results" / exp / "01_profile"
+    _write_json(root / "benchmark_1" / "detailed_results.json", {})
+    _write_json(root / "aggregated_training_data.json", {"training_data": []})
+    _write_json(root / "latency_benchmark.json", {})
+
+    cfg = _flat_cfg(
+        experiment_id=exp,
+        workflow_type="openclaw_lobster",
+    )
+    with pytest.raises(SystemExit, match="openclaw_lobster_workflow_file is required"):
+        cli.cmd_compile_predict(_empty_predict_args(), cfg)

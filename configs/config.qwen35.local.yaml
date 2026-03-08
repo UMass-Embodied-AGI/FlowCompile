@@ -1,0 +1,35 @@
+models:
+  qwen35-0.8b-local:
+    api_type: "openai"
+    base_url: "http://127.0.0.1:8000/v1"
+    api_key: "EMPTY"
+    model: "Qwen/Qwen3.5-0.8B"
+    hf_model_name: "Qwen/Qwen3.5-0.8B"
+
+  qwen35-2b-local:
+    api_type: "openai"
+    base_url: "http://127.0.0.1:8000/v1"
+    api_key: "EMPTY"
+    model: "Qwen/Qwen3.5-2B"
+    hf_model_name: "Qwen/Qwen3.5-2B"
+
+  qwen35-4b-local:
+    api_type: "openai"
+    base_url: "http://127.0.0.1:8000/v1"
+    api_key: "EMPTY"
+    model: "Qwen/Qwen3.5-4B"
+    hf_model_name: "Qwen/Qwen3.5-4B"
+
+  qwen35-9b-local:
+    api_type: "openai"
+    base_url: "http://127.0.0.1:8000/v1"
+    api_key: "EMPTY"
+    model: "Qwen/Qwen3.5-9B"
+    hf_model_name: "Qwen/Qwen3.5-9B"
+
+  qwen35-27b-local:
+    api_type: "openai"
+    base_url: "http://127.0.0.1:8000/v1"
+    api_key: "EMPTY"
+    model: "Qwen/Qwen3.5-27B"
+    hf_model_name: "Qwen/Qwen3.5-27B"
