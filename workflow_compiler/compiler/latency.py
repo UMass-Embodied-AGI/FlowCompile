@@ -559,8 +559,23 @@ def _print_results_table(model: str, prompt_file: str, max_new_tokens: int, resu
 def _save_latency_json(output_json: str, payload: Dict[str, Any]) -> None:
     output_path = Path(output_json)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    merged_payload: Dict[str, Any] = {}
+
+    if output_path.exists():
+        try:
+            with open(output_path, "r", encoding="utf-8") as f:
+                existing_payload = json.load(f)
+            if isinstance(existing_payload, dict):
+                merged_payload.update(existing_payload)
+        except Exception:
+            # If the previous file is unreadable/invalid, fall back to writing fresh payload.
+            pass
+
+    # Upsert new benchmark results so repeated runs augment instead of replacing the file.
+    merged_payload.update(payload)
+
     with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
+        json.dump(merged_payload, f, indent=2)
 
 
 def _run_latency_benchmark_vllm(

@@ -31,11 +31,27 @@ models:
     enable_thinking_budget: true
     thinking_budget_reasoning_parser: "qwen3"
 
+  qwen35-9b-awq:
+    api_type: "openai"
+    base_url: "http://127.0.0.1:4000"
+    api_key: "sk-proxy-demo-key"
+    hf_model_name: "QuantTrio/Qwen3.5-9B-AWQ"
+    enable_thinking_budget: true
+    thinking_budget_reasoning_parser: "qwen3"
+
   qwen35-27b:
     api_type: "openai"
     base_url: "http://127.0.0.1:4000"
     api_key: "sk-proxy-demo-key"
     hf_model_name: "Qwen/Qwen3.5-27B"
+    enable_thinking_budget: true
+    thinking_budget_reasoning_parser: "qwen3"
+
+  qwen35-27b-awq:
+    api_type: "openai"
+    base_url: "http://127.0.0.1:4000"
+    api_key: "sk-proxy-demo-key"
+    hf_model_name: "QuantTrio/Qwen3.5-27B-AWQ"
     enable_thinking_budget: true
     thinking_budget_reasoning_parser: "qwen3"
 
