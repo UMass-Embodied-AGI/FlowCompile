@@ -184,3 +184,18 @@ def test_compile_predict_saves_subagent_plots_to_figures_dir(monkeypatch, tmp_pa
     assert persisted["metadata"]["subagent_score_latency_plots"] == {
         "programmer": str(expected_figures_dir / "analyze_programmer_latency_h100.png")
     }
+
+
+def test_extract_plot_model_budget_groups_by_model():
+    model, budget = pipeline._extract_plot_model_budget("qwen35-4b_budget_200")
+    assert model == "qwen35-4b"
+    assert budget == 200.0
+
+    model_local, budget_local = pipeline._extract_plot_model_budget("qwen35-4b-local_budget_1000")
+    assert model_local == "qwen35-4b-local"
+    assert budget_local == 1000.0
+
+    # Non-standard setting strings fall back to themselves, preserving old behavior safely.
+    model_raw, budget_raw = pipeline._extract_plot_model_budget("custom-setting")
+    assert model_raw == "custom-setting"
+    assert budget_raw == float("inf")

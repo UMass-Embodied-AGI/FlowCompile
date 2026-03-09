@@ -102,6 +102,17 @@ class BatchStats:
     prefill_tok_per_s: Optional[float]
     decode_tok_per_s: Optional[float]
 
+
+@dataclass
+class OpenAIStreamResult:
+    request_start_s: float
+    first_visible_token_s: Optional[float]
+    end_s: float
+    prompt_tokens: Optional[int]
+    completion_tokens: Optional[int]
+    saw_visible_delta: bool
+
+
 async def _stream_one(
     engine,
     req_id: str,
@@ -324,16 +335,54 @@ async def _create_stream_with_fallbacks(client, payload: Dict[str, Any]):
     raise last_exc
 
 
+async def _create_completion_with_fallbacks(client, payload: Dict[str, Any]):
+    attempts: List[Dict[str, Any]] = [dict(payload)]
+    payload_no_seed = dict(payload)
+    payload_no_seed.pop("seed", None)
+    attempts.append(payload_no_seed)
+
+    last_exc = None
+    for request in attempts:
+        try:
+            return await client.chat.completions.create(**request)
+        except Exception as exc:
+            last_exc = exc
+    raise last_exc
+
+
+async def _probe_openai_ttft(
+    client,
+    request_model: str,
+    prompt: str,
+    seed: int,
+) -> float:
+    payload = {
+        "model": request_model,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 1,
+        "temperature": 0.0,
+        "top_p": 1.0,
+        "stream": False,
+        "seed": seed,
+    }
+    started = time.perf_counter()
+    await _create_completion_with_fallbacks(client, payload)
+    _gpu_sync()
+    return max(0.0, time.perf_counter() - started)
+
+
 async def _stream_one_openai(
     client,
     request_model: str,
     prompt: str,
     max_new_tokens: int,
     seed: int,
-) -> Tuple[float, float, Optional[int], Optional[int]]:
-    first_time = None
+) -> OpenAIStreamResult:
+    request_start = time.perf_counter()
+    first_visible_time = None
     prompt_tokens = None
     completion_tokens = None
+    saw_visible_delta = False
     generated_text: List[str] = []
 
     payload = {
@@ -365,21 +414,28 @@ async def _stream_one_openai(
             continue
         content = getattr(delta, "content", None)
         reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
-        if first_time is None and (content or reasoning):
+        if content or reasoning:
+            saw_visible_delta = True
+        if first_visible_time is None and (content or reasoning):
             _gpu_sync()
-            first_time = time.perf_counter()
+            first_visible_time = time.perf_counter()
         if content:
             generated_text.append(content)
 
     _gpu_sync()
     end_time = time.perf_counter()
-    if first_time is None:
-        first_time = end_time
 
     if completion_tokens is None:
         completion_tokens = _estimate_tokens("".join(generated_text))
 
-    return first_time, end_time, prompt_tokens, completion_tokens
+    return OpenAIStreamResult(
+        request_start_s=request_start,
+        first_visible_token_s=first_visible_time,
+        end_s=end_time,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        saw_visible_delta=saw_visible_delta,
+    )
 
 
 async def measure_batch_openai(
@@ -390,6 +446,7 @@ async def measure_batch_openai(
     max_new_tokens: int,
     seed: int,
 ) -> BatchStats:
+    reporter = get_reporter().child("get-latency")
     estimated_prompt_tokens = _estimate_tokens(prompt_text)
     coros = [
         _stream_one_openai(client, request_model, prompt_text, max_new_tokens, seed + i)
@@ -399,14 +456,58 @@ async def measure_batch_openai(
     _gpu_sync()
     t0 = time.perf_counter()
 
-    results: List[Tuple[float, float, Optional[int], Optional[int]]] = []
+    results: List[OpenAIStreamResult] = []
     async for r in _async_drain(coros):
         results.append(r)
 
-    first_times = [r[0] for r in results]
-    end_times = [r[1] for r in results]
-    prompt_tokens = [r[2] if r[2] is not None else estimated_prompt_tokens for r in results]
-    completion_tokens = [r[3] if r[3] is not None else 0 for r in results]
+    ttft_probe_s: Optional[float] = None
+    used_probe = 0
+
+    first_times: List[float] = []
+    end_times = [r.end_s for r in results]
+    prompt_tokens = [r.prompt_tokens if r.prompt_tokens is not None else estimated_prompt_tokens for r in results]
+    completion_tokens = [r.completion_tokens if r.completion_tokens is not None else 0 for r in results]
+
+    for r, completion in zip(results, completion_tokens):
+        if r.first_visible_token_s is not None:
+            first_times.append(r.first_visible_token_s)
+            continue
+
+        # Some OpenAI-compatible routes only emit terminal usage for hidden-token
+        # generations. Keep decode metrics stable via a one-shot non-stream TTFT probe.
+        if completion > 0 and not r.saw_visible_delta:
+            if ttft_probe_s is None:
+                try:
+                    ttft_probe_s = await _probe_openai_ttft(
+                        client=client,
+                        request_model=request_model,
+                        prompt=prompt_text,
+                        seed=seed,
+                    )
+                except Exception as exc:
+                    reporter.warn(
+                        "OpenAI TTFT probe failed while handling hidden-token stream "
+                        f"for model '{request_model}': {exc}. "
+                        "Using request-start fallback."
+                    )
+                    ttft_probe_s = 0.0
+
+            request_elapsed = max(0.0, r.end_s - r.request_start_s)
+            epsilon = min(1e-3, request_elapsed * 0.5)
+            upper = max(0.0, request_elapsed - epsilon)
+            ttft_est = min(max(ttft_probe_s, 0.0), upper)
+            first_times.append(r.request_start_s + ttft_est)
+            used_probe += 1
+            continue
+
+        first_times.append(r.end_s)
+
+    if used_probe:
+        reporter.warn(
+            "OpenAI stream emitted no visible token deltas for "
+            f"{used_probe}/{len(results)} request(s) on model '{request_model}' "
+            f"(batch={batch_size}); decode timing used TTFT probe fallback."
+        )
 
     ttfts = [ft - t0 for ft in first_times]
     ttft_avg = sum(ttfts) / len(ttfts) if ttfts else 0.0

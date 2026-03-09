@@ -11,6 +11,7 @@ from datetime import datetime
 import pandas as pd
 
 from workflow_compiler.core.analysis.modeling import filter_pareto_optimal
+from workflow_compiler.core.llm.config import parse_config
 from workflow_compiler.core.terminal import get_reporter
 from workflow_compiler.compiler.prep import convert_to_consolidated, build_subagent_stats
 from workflow_compiler.routers.utils import row_to_runtime_config
@@ -82,6 +83,32 @@ def _safe_plot_stem(name: str) -> str:
     return stem or "subagent"
 
 
+def _to_budget_sort_value(budget: Any) -> float:
+    if budget is None:
+        return float("inf")
+    if isinstance(budget, (int, float)):
+        return float(budget)
+    text = str(budget).strip().lower()
+    if text == "nothinking":
+        return 0.0
+    if text == "unlimited":
+        return float("inf")
+    try:
+        return float(text)
+    except Exception:
+        return float("inf")
+
+
+def _extract_plot_model_budget(setting: Any) -> tuple[str, float]:
+    setting_str = str(setting)
+    try:
+        model, budget = parse_config(setting_str)
+        model_name = model or setting_str
+        return model_name, _to_budget_sort_value(budget)
+    except Exception:
+        return setting_str, float("inf")
+
+
 def _save_subagent_latency_score_plots(
     df_subagents: Dict[str, pd.DataFrame],
     output_dir: Path,
@@ -107,23 +134,26 @@ def _save_subagent_latency_score_plots(
             plot_df = sub_df.copy()
             if "setting" in plot_df.columns:
                 model_values: List[str] = []
+                budget_values: List[float] = []
                 for setting in plot_df["setting"]:
-                    setting_str = str(setting)
-                    try:
-                        model, _budget = parse_config(setting_str)
-                    except Exception:
-                        model = setting_str
-                    model_values.append(model or setting_str)
+                    model_name, budget_value = _extract_plot_model_budget(setting)
+                    model_values.append(model_name)
+                    budget_values.append(budget_value)
                 plot_df["model"] = model_values
+                plot_df["budget_sort"] = budget_values
             else:
                 plot_df["model"] = "unknown"
+                plot_df["budget_sort"] = float("inf")
 
             out_path = output_dir / f"analyze_{_safe_plot_stem(subagent)}_latency_h100.png"
             plt.figure(figsize=(10, 7))
             model_names = sorted({str(m) for m in plot_df["model"].dropna().tolist()})
             cmap = plt.get_cmap("tab20")
             for idx, model_name in enumerate(model_names):
-                df_model = plot_df[plot_df["model"] == model_name].sort_values("latency")
+                df_model = plot_df[plot_df["model"] == model_name].sort_values(
+                    ["budget_sort", "latency"],
+                    ascending=[True, True],
+                )
                 if df_model.empty:
                     continue
                 plt.plot(

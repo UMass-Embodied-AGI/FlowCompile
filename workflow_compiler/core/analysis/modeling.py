@@ -34,6 +34,16 @@ MODEL_TO_HF_NAME = {
     "qwen3-14b": "Qwen/Qwen3-14B",
     "qwen3-32b": "Qwen/Qwen3-32B",
     "qwen3-30b-a3b": "Qwen/Qwen3-30B-A3B",
+    "qwen35-0.8b": "Qwen/Qwen3.5-0.8B",
+    "qwen35-2b": "Qwen/Qwen3.5-2B",
+    "qwen35-4b": "Qwen/Qwen3.5-4B",
+    "qwen35-9b": "Qwen/Qwen3.5-9B",
+    "qwen35-27b": "Qwen/Qwen3.5-27B",
+    "qwen35-0.8b-local": "Qwen/Qwen3.5-0.8B",
+    "qwen35-2b-local": "Qwen/Qwen3.5-2B",
+    "qwen35-4b-local": "Qwen/Qwen3.5-4B",
+    "qwen35-9b-local": "Qwen/Qwen3.5-9B",
+    "qwen35-27b-local": "Qwen/Qwen3.5-27B",
     "ministral-14b": "mistralai/Ministral-3-14B-Reasoning-2512",
     "qwq-32b": "Qwen/QwQ-32B",
     "ds-32b": "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
@@ -50,7 +60,16 @@ def get_hf_model_name(model_name: str) -> str:
     Returns:
         HuggingFace model name (e.g., 'Qwen/Qwen3-4B')
     """
-    return MODEL_TO_HF_NAME.get(model_name, model_name)
+    resolved = MODEL_TO_HF_NAME.get(model_name)
+    if resolved is not None:
+        return resolved
+    # Keep local alias compatibility (e.g., qwen35-4b-local -> qwen35-4b).
+    if model_name.endswith("-local"):
+        stripped = model_name[:-len("-local")]
+        resolved = MODEL_TO_HF_NAME.get(stripped)
+        if resolved is not None:
+            return resolved
+    return model_name
 
 
 def extract_model_name(

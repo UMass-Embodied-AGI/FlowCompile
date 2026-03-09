@@ -260,3 +260,4 @@ experiment/**/
 *.pkl
 
 AGENTS.md
+openclaw/

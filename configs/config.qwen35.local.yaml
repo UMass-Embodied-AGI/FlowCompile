@@ -1,35 +1,49 @@
 models:
-  qwen35-0.8b-local:
+  qwen35-0.8b:
     api_type: "openai"
-    base_url: "http://127.0.0.1:8000/v1"
-    api_key: "EMPTY"
-    model: "Qwen/Qwen3.5-0.8B"
+    base_url: "http://127.0.0.1:4000"
+    api_key: "sk-proxy-demo-key"
     hf_model_name: "Qwen/Qwen3.5-0.8B"
+    enable_thinking_budget: true
+    thinking_budget_reasoning_parser: "qwen3"
 
-  qwen35-2b-local:
+  qwen35-2b:
     api_type: "openai"
-    base_url: "http://127.0.0.1:8000/v1"
-    api_key: "EMPTY"
-    model: "Qwen/Qwen3.5-2B"
+    base_url: "http://127.0.0.1:4000"
+    api_key: "sk-proxy-demo-key"
     hf_model_name: "Qwen/Qwen3.5-2B"
+    enable_thinking_budget: true
+    thinking_budget_reasoning_parser: "qwen3"
 
-  qwen35-4b-local:
+  qwen35-4b:
     api_type: "openai"
-    base_url: "http://127.0.0.1:8000/v1"
-    api_key: "EMPTY"
-    model: "Qwen/Qwen3.5-4B"
+    base_url: "http://127.0.0.1:4000"
+    api_key: "sk-proxy-demo-key"
     hf_model_name: "Qwen/Qwen3.5-4B"
+    enable_thinking_budget: true
+    thinking_budget_reasoning_parser: "qwen3"
 
-  qwen35-9b-local:
+  qwen35-9b:
     api_type: "openai"
-    base_url: "http://127.0.0.1:8000/v1"
-    api_key: "EMPTY"
-    model: "Qwen/Qwen3.5-9B"
+    base_url: "http://127.0.0.1:4000"
+    api_key: "sk-proxy-demo-key"
     hf_model_name: "Qwen/Qwen3.5-9B"
+    enable_thinking_budget: true
+    thinking_budget_reasoning_parser: "qwen3"
 
-  qwen35-27b-local:
+  qwen35-27b:
     api_type: "openai"
-    base_url: "http://127.0.0.1:8000/v1"
-    api_key: "EMPTY"
-    model: "Qwen/Qwen3.5-27B"
+    base_url: "http://127.0.0.1:4000"
+    api_key: "sk-proxy-demo-key"
     hf_model_name: "Qwen/Qwen3.5-27B"
+    enable_thinking_budget: true
+    thinking_budget_reasoning_parser: "qwen3"
+
+
+  gpt-oss-120b:
+    api_type: "openai"
+    base_url: "http://127.0.0.1:4000"
+    api_key: "sk-proxy-demo-key"
+    hf_model_name: "openai/gpt-oss-120b"
+    enable_thinking_budget: false
+    default_reasoning_effort: "medium"

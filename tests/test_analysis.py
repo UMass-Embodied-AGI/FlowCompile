@@ -86,6 +86,22 @@ class TestLatencyCalculation:
         # Test with budget string
         latency = calculate_latency(100, 50, 'qwen3-4b_budget_1000', latency_data)
         assert abs(latency - expected) < 1e-6
+
+    def test_calculate_latency_qwen35_alias(self):
+        """Test latency calculation for qwen35 model aliases."""
+        latency_data = {
+            'Qwen/Qwen3.5-4B': {
+                'prefill_latency_per_token': 0.0001,
+                'decode_latency_per_token': 0.001,
+            }
+        }
+
+        latency = calculate_latency(100, 50, 'qwen35-4b_budget_1000', latency_data)
+        expected = 100 * 0.0001 + 50 * 0.001
+        assert abs(latency - expected) < 1e-6
+
+        latency_local = calculate_latency(100, 50, 'qwen35-4b-local_budget_1000', latency_data)
+        assert abs(latency_local - expected) < 1e-6
     
     def test_calculate_latency_unknown_model(self):
         """Test latency calculation with unknown model."""
