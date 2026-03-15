@@ -288,6 +288,46 @@ models:
     assert captured["search_space"]["models"] == ["qwen3-4b"]
 
 
+def test_compile_predict_forwards_subagent_score_thresholds(monkeypatch, tmp_path: Path):
+    monkeypatch.chdir(tmp_path)
+    exp = "exp_flat"
+    root = tmp_path / "results" / exp / "01_profile"
+    _write_json(root / "benchmark_1" / "detailed_results.json", {})
+    _write_json(root / "aggregated_training_data.json", {"training_data": []})
+    _write_json(root / "latency_benchmark.json", {})
+
+    captured = {}
+
+    def fake_compile_pareto(**kwargs):
+        captured.update(kwargs)
+        return {"configs": [], "metadata": {}}
+
+    monkeypatch.setattr(cli, "compile_pareto", fake_compile_pareto)
+
+    cfg = _flat_cfg(
+        experiment_id=exp,
+        predict_subagent_score_thresholds={"programmer": 0.65, "refine_solver": 0.7},
+    )
+    assert cli.cmd_compile_predict(_empty_predict_args(), cfg) == 0
+    assert captured["subagent_score_thresholds"] == {"programmer": 0.65, "refine_solver": 0.7}
+
+
+def test_compile_predict_rejects_invalid_subagent_score_thresholds(monkeypatch, tmp_path: Path):
+    monkeypatch.chdir(tmp_path)
+    exp = "exp_flat"
+    root = tmp_path / "results" / exp / "01_profile"
+    _write_json(root / "benchmark_1" / "detailed_results.json", {})
+    _write_json(root / "aggregated_training_data.json", {"training_data": []})
+    _write_json(root / "latency_benchmark.json", {})
+
+    cfg = _flat_cfg(
+        experiment_id=exp,
+        predict_subagent_score_thresholds={"programmer": 1.2},
+    )
+    with pytest.raises(SystemExit, match="must be a finite float in \\[0.0, 1.0\\]"):
+        cli.cmd_compile_predict(_empty_predict_args(), cfg)
+
+
 def test_derive_search_models_errors_for_missing_and_ambiguous_mapping(tmp_path: Path):
     missing_cfg = _flat_cfg(model_config=str(tmp_path / "missing_map.yaml"), latency_models=["Qwen/Qwen3-8B"])
     _write_text(
@@ -494,9 +534,25 @@ def test_cmd_compile_predict_forwards_openclaw_lobster_workflow_file(monkeypatch
         experiment_id=exp,
         workflow_type="openclaw_lobster",
         openclaw_lobster_workflow_file="workflows/outlook.lobster.yaml",
+        workflow_loops=[
+            {
+                "name": "email_loop",
+                "count": 20,
+                "map_nodes": ["summarize_each", "classify"],
+                "reduce_node": "overview",
+            }
+        ],
     )
     assert cli.cmd_compile_predict(_empty_predict_args(), cfg) == 0
     assert captured["openclaw_lobster_workflow_file"] == "workflows/outlook.lobster.yaml"
+    assert captured["workflow_loops"] == [
+        {
+            "name": "email_loop",
+            "count": 20,
+            "map_nodes": ["summarize_each", "classify"],
+            "reduce_node": "overview",
+        }
+    ]
 
 
 def test_cmd_compile_predict_requires_openclaw_lobster_workflow_file(monkeypatch, tmp_path: Path):

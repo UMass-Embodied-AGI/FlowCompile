@@ -405,12 +405,12 @@ class MetricContext:
     REQUIRED_COLUMNS = ("setting", "accuracy", "latency")
 
     def __init__(self, workflow: "WorkflowModule", payload: Dict[str, Any], metadata: Optional[Dict[str, Any]] = None):
-        del metadata
         payload = workflow._validate_backward_payload(payload)
         self.workflow = workflow
         self.payload = payload
         self.structure: Dict[str, Any] = payload["structure"]
         self.metrics: Dict[str, pd.DataFrame] = payload.get("metrics") or {}
+        self.metadata: Dict[str, Any] = dict(metadata) if isinstance(metadata, dict) else {}
 
         self.metric_agents: List[str] = workflow.infer_agent_names()
         raw_counts = self.structure.get("active_agent_counts") or {}

@@ -125,3 +125,149 @@ def test_openclaw_lobster_backward_map_reduce_formula(tmp_path: Path):
     expected_accuracy = (0.8 * 0.7) * 0.9 * (0.6 * 0.5)
     assert float(result["workflow_accuracy"].iloc[0]) == pytest.approx(expected_accuracy)
     assert float(result["workflow_latency"].iloc[0]) == pytest.approx(1.0 + 2.0 + 3.0 + 4.0 + 5.0)
+
+
+def test_workflow_loops_scale_map_and_count_reduce_once(tmp_path: Path):
+    workflow_file = tmp_path / "outlook.lobster.yaml"
+    _write_lobster_fixture(workflow_file)
+
+    workflow = get_workflow_module(
+        "openclaw_lobster",
+        openclaw_lobster_workflow_file=str(workflow_file),
+    )
+    structure = workflow.get_full_structure()
+    payload = {
+        "structure": structure,
+        "metrics": {
+            "summarize_each": _tiny_df(0.8, 1.0),
+            "classify": _tiny_df(0.7, 2.0),
+            "overview": _tiny_df(0.9, 3.0),
+            "ask_questions": _tiny_df(0.6, 4.0),
+            "draft_replies": _tiny_df(0.5, 5.0),
+        },
+        "metadata": {
+            "workflow_loops": [
+                {
+                    "name": "email_loop",
+                    "count": 20,
+                    "map_nodes": ["summarize_each", "classify"],
+                    "reduce_node": "overview",
+                },
+                {
+                    "name": "reply_loop",
+                    "count": 2,
+                    "map_nodes": ["ask_questions", "draft_replies"],
+                },
+            ]
+        },
+    }
+    result = workflow.backward(payload)
+    assert len(result) == 1
+    assert float(result["workflow_accuracy"].iloc[0]) == pytest.approx((0.8 * 0.7) * 0.9 * (0.6 * 0.5))
+    assert float(result["workflow_latency"].iloc[0]) == pytest.approx(20.0 * (1.0 + 2.0) + 3.0 + 2.0 * (4.0 + 5.0))
+
+
+def test_workflow_loops_reject_invalid_reduce_operator(tmp_path: Path):
+    workflow_file = tmp_path / "outlook.lobster.yaml"
+    _write_lobster_fixture(workflow_file)
+
+    workflow = get_workflow_module(
+        "openclaw_lobster",
+        openclaw_lobster_workflow_file=str(workflow_file),
+    )
+    structure = workflow.get_full_structure()
+    payload = {
+        "structure": structure,
+        "metrics": {
+            "summarize_each": _tiny_df(0.8, 1.0),
+            "classify": _tiny_df(0.7, 2.0),
+            "overview": _tiny_df(0.9, 3.0),
+            "ask_questions": _tiny_df(0.6, 4.0),
+            "draft_replies": _tiny_df(0.5, 5.0),
+        },
+        "metadata": {
+            "workflow_loops": [
+                {
+                    "name": "bad_reduce",
+                    "count": 3,
+                    "map_nodes": ["summarize_each"],
+                    "reduce_node": "classify",
+                }
+            ]
+        },
+    }
+
+    with pytest.raises(ValueError, match="must use operator map_reduce or reduce"):
+        workflow.backward(payload)
+
+
+def test_workflow_loops_reject_overlapping_nodes(tmp_path: Path):
+    workflow_file = tmp_path / "outlook.lobster.yaml"
+    _write_lobster_fixture(workflow_file)
+
+    workflow = get_workflow_module(
+        "openclaw_lobster",
+        openclaw_lobster_workflow_file=str(workflow_file),
+    )
+    structure = workflow.get_full_structure()
+    payload = {
+        "structure": structure,
+        "metrics": {
+            "summarize_each": _tiny_df(0.8, 1.0),
+            "classify": _tiny_df(0.7, 2.0),
+            "overview": _tiny_df(0.9, 3.0),
+            "ask_questions": _tiny_df(0.6, 4.0),
+            "draft_replies": _tiny_df(0.5, 5.0),
+        },
+        "metadata": {
+            "workflow_loops": [
+                {
+                    "name": "loop_a",
+                    "count": 20,
+                    "map_nodes": ["summarize_each", "classify"],
+                    "reduce_node": "overview",
+                },
+                {
+                    "name": "loop_b",
+                    "count": 2,
+                    "map_nodes": ["classify", "ask_questions"],
+                },
+            ]
+        },
+    }
+
+    with pytest.raises(ValueError, match="assigned to both"):
+        workflow.backward(payload)
+
+
+def test_workflow_loops_reject_unknown_nodes(tmp_path: Path):
+    workflow_file = tmp_path / "outlook.lobster.yaml"
+    _write_lobster_fixture(workflow_file)
+
+    workflow = get_workflow_module(
+        "openclaw_lobster",
+        openclaw_lobster_workflow_file=str(workflow_file),
+    )
+    structure = workflow.get_full_structure()
+    payload = {
+        "structure": structure,
+        "metrics": {
+            "summarize_each": _tiny_df(0.8, 1.0),
+            "classify": _tiny_df(0.7, 2.0),
+            "overview": _tiny_df(0.9, 3.0),
+            "ask_questions": _tiny_df(0.6, 4.0),
+            "draft_replies": _tiny_df(0.5, 5.0),
+        },
+        "metadata": {
+            "workflow_loops": [
+                {
+                    "name": "bad_node",
+                    "count": 2,
+                    "map_nodes": ["missing_node"],
+                }
+            ]
+        },
+    }
+
+    with pytest.raises(ValueError, match="unknown or inactive map node"):
+        workflow.backward(payload)

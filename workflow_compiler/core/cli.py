@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import re
 import sys
 import time
@@ -24,6 +25,9 @@ from workflow_compiler.compiler.validation import run_validation
 from workflow_compiler.routers import get_router
 from workflow_compiler.routers.utils import consolidate_validation_data
 from workflow_compiler.runtime.infer import infer_runtime, infer_runtime_batch
+from workflow_compiler.runtime.selector import (
+    RUNTIME_PREFERENCE_BUDGET_PRESETS as _RUNTIME_PREFERENCE_BUDGET_PRESETS,
+)
 from workflow_compiler.core.analysis.prediction import parse_search_axes, parse_agent_constraints
 from workflow_compiler.benchmarks import get_benchmark_info
 from workflow_compiler.core.data_paths import resolve_existing_path
@@ -55,12 +59,6 @@ _REQUIRED_FLAT_KEYS = {
     "test_file",
     "search_axes",
     "search_budgets",
-}
-_RUNTIME_PREFERENCE_BUDGET_PRESETS = {
-    "low": 0.01,
-    "medium": 0.5,
-    "high": 0.9,
-    "xhigh": 0.999,
 }
 _REMOVED_TEST_KEYS = {
     "test_pareto_only",
@@ -226,6 +224,52 @@ def _cfg_get(cfg: Dict[str, Any], *keys, default=None):
 
 def _arg_get(args: Any, name: str, default: Any = None) -> Any:
     return getattr(args, name, default)
+
+
+def _normalize_workflow_loops(raw: Any) -> Optional[List[Dict[str, Any]]]:
+    if raw in (None, "", []):
+        return None
+    if not isinstance(raw, list):
+        raise SystemExit("workflow_loops must be a list of loop definitions")
+
+    normalized: List[Dict[str, Any]] = []
+    for idx, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise SystemExit(f"workflow_loops[{idx}] must be a mapping")
+        normalized_item = dict(item)
+        if "map_nodes" in normalized_item and isinstance(normalized_item["map_nodes"], list):
+            normalized_item["map_nodes"] = [str(value) for value in normalized_item["map_nodes"]]
+        normalized.append(normalized_item)
+    return normalized
+
+
+def _parse_subagent_score_thresholds(raw: Any) -> Optional[Dict[str, float]]:
+    if raw in (None, "", {}):
+        return None
+    if not isinstance(raw, dict):
+        raise SystemExit("predict_subagent_score_thresholds must be a mapping of subagent -> threshold.")
+
+    parsed: Dict[str, float] = {}
+    for raw_name, raw_threshold in raw.items():
+        name = str(raw_name).strip()
+        if not name:
+            raise SystemExit("predict_subagent_score_thresholds contains an empty subagent name.")
+        if isinstance(raw_threshold, bool):
+            raise SystemExit(
+                f"predict_subagent_score_thresholds[{name!r}] must be a float in [0.0, 1.0]."
+            )
+        try:
+            threshold = float(raw_threshold)
+        except (TypeError, ValueError) as exc:
+            raise SystemExit(
+                f"predict_subagent_score_thresholds[{name!r}] must be a float in [0.0, 1.0]."
+            ) from exc
+        if not math.isfinite(threshold) or threshold < 0.0 or threshold > 1.0:
+            raise SystemExit(
+                f"predict_subagent_score_thresholds[{name!r}] must be a finite float in [0.0, 1.0]."
+            )
+        parsed[name] = threshold
+    return parsed
 
 
 def _format_elapsed(elapsed: float) -> str:
@@ -1179,6 +1223,10 @@ def cmd_compile_predict(args, cfg):
         _cfg_flat_get(cfg, "openclaw_lobster_workflow_file")
         or pred.get("openclaw_lobster_workflow_file")
     )
+    workflow_loops = _normalize_workflow_loops(
+        _cfg_flat_get(cfg, "workflow_loops")
+        or pred.get("workflow_loops")
+    )
     include_all_arg = _arg_get(args, "include_all")
     include_all = (
         include_all_arg
@@ -1190,6 +1238,9 @@ def cmd_compile_predict(args, cfg):
         prune_subagents_arg
         if prune_subagents_arg is not None
         else _cfg_flat_get(cfg, "predict_prune_subagents", pred.get("prune_subagents", True))
+    )
+    subagent_score_thresholds = _parse_subagent_score_thresholds(
+        _cfg_flat_get(cfg, "predict_subagent_score_thresholds")
     )
     search_space = _build_search_space_with_cfg(args, pred, cfg=cfg, prefix="predict")
 
@@ -1256,7 +1307,9 @@ def cmd_compile_predict(args, cfg):
         include_all_configs=include_all,
         search_space=search_space,
         prune_subagents=prune_subagents,
+        subagent_score_thresholds=subagent_score_thresholds,
         openclaw_lobster_workflow_file=openclaw_lobster_workflow_file,
+        workflow_loops=workflow_loops,
     )
     metadata = compiled.get("metadata", {})
     _emit_command_summary(

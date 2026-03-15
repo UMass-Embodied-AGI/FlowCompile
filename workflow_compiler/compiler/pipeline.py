@@ -1,7 +1,7 @@
 """FlowCompile compiler pipeline (Pareto configuration generation)."""
 from __future__ import annotations
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from pathlib import Path
 import json
 import re
@@ -15,7 +15,98 @@ from workflow_compiler.core.llm.config import parse_config
 from workflow_compiler.core.terminal import get_reporter
 from workflow_compiler.compiler.prep import convert_to_consolidated, build_subagent_stats
 from workflow_compiler.routers.utils import row_to_runtime_config
+from workflow_compiler.runtime.selector import (
+    RUNTIME_PREFERENCE_BUDGET_PRESETS,
+    select_config,
+)
 from workflow_compiler.workflows.dsl_registry import get_workflow_module
+
+
+def _select_runtime_budget_presets(configs: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    if not configs:
+        return {}
+    selected: Dict[str, Dict[str, Any]] = {}
+    for preset_name, budget in RUNTIME_PREFERENCE_BUDGET_PRESETS.items():
+        config = select_config(
+            configs,
+            strategy="preference",
+            budget=float(budget),
+        )
+        if config is not None:
+            selected[preset_name] = config
+    return selected
+
+
+def _extract_runtime_budget_preset_plot_points(
+    runtime_budget_presets: Optional[Dict[str, Dict[str, Any]]],
+) -> List[Dict[str, Any]]:
+    if not runtime_budget_presets:
+        return []
+
+    ordered_names = list(RUNTIME_PREFERENCE_BUDGET_PRESETS.keys())
+    order_index = {name: idx for idx, name in enumerate(ordered_names)}
+    by_point: Dict[Tuple[float, float], List[str]] = {}
+
+    for preset_name, config in runtime_budget_presets.items():
+        cfg = config if isinstance(config, dict) else {}
+        metrics = cfg.get("metrics", {})
+        raw_latency = metrics.get("expected_latency", cfg.get("expected_latency"))
+        raw_accuracy = metrics.get("expected_accuracy", cfg.get("expected_accuracy"))
+        if raw_latency is None or raw_accuracy is None:
+            continue
+        try:
+            latency = float(raw_latency)
+            accuracy = float(raw_accuracy)
+        except (TypeError, ValueError):
+            continue
+        by_point.setdefault((latency, accuracy), []).append(str(preset_name))
+
+    points: List[Dict[str, Any]] = []
+    for (latency, accuracy), labels in sorted(by_point.items(), key=lambda item: (item[0][0], item[0][1])):
+        labels_sorted = sorted(labels, key=lambda label: order_index.get(label, len(order_index)))
+        points.append(
+            {
+                "latency": latency,
+                "accuracy": accuracy,
+                "labels": labels_sorted,
+                "label_text": "/".join(labels_sorted),
+            }
+        )
+    return points
+
+
+def _apply_subagent_score_thresholds(
+    df_subagents: Dict[str, pd.DataFrame],
+    thresholds: Optional[Dict[str, float]],
+) -> Dict[str, pd.DataFrame]:
+    if not thresholds:
+        return {agent: agent_df.copy() for agent, agent_df in df_subagents.items()}
+
+    unknown = sorted(set(thresholds.keys()) - set(df_subagents.keys()))
+    if unknown:
+        raise ValueError(
+            "Unknown subagent(s) in predict_subagent_score_thresholds: "
+            f"{unknown}. Available: {sorted(df_subagents.keys())}"
+        )
+
+    filtered: Dict[str, pd.DataFrame] = {}
+    for agent, agent_df in df_subagents.items():
+        threshold = thresholds.get(agent)
+        source = agent_df.copy()
+        if threshold is None:
+            filtered[agent] = source.reset_index(drop=True)
+            continue
+        if "accuracy" not in source.columns:
+            raise ValueError(
+                f"Subagent '{agent}' data is missing 'accuracy' column required for threshold filtering."
+            )
+        kept = source[source["accuracy"] >= float(threshold)].copy().reset_index(drop=True)
+        if kept.empty:
+            raise ValueError(
+                f"Threshold {float(threshold):.6g} removed all settings for subagent '{agent}'."
+            )
+        filtered[agent] = kept
+    return filtered
 
 
 def _save_latency_score_plot(
@@ -23,6 +114,7 @@ def _save_latency_score_plot(
     pareto_df: pd.DataFrame,
     output_path: Path,
     workflow_type: str,
+    runtime_budget_presets: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Optional[str]:
     if workflow_df.empty or pareto_df.empty:
         return None
@@ -67,6 +159,37 @@ def _save_latency_score_plot(
         alpha=0.8,
         zorder=2,
     )
+    preset_points = _extract_runtime_budget_preset_plot_points(runtime_budget_presets)
+    if preset_points:
+        xs = [point["latency"] for point in preset_points]
+        ys = [point["accuracy"] for point in preset_points]
+        plt.scatter(
+            xs,
+            ys,
+            s=110,
+            marker="X",
+            c="#2ca02c",
+            edgecolors="black",
+            linewidths=0.8,
+            label="Runtime presets",
+            zorder=4,
+        )
+        for point in preset_points:
+            plt.annotate(
+                point["label_text"],
+                xy=(point["latency"], point["accuracy"]),
+                xytext=(6, 6),
+                textcoords="offset points",
+                fontsize=9,
+                bbox={
+                    "boxstyle": "round,pad=0.2",
+                    "fc": "white",
+                    "ec": "#2ca02c",
+                    "alpha": 0.85,
+                    "lw": 0.7,
+                },
+                zorder=5,
+            )
     plt.xlabel("Workflow Latency (seconds)")
     plt.ylabel("Workflow Accuracy")
     plt.title(f"Workflow Accuracy vs Latency ({workflow_type})")
@@ -266,7 +389,9 @@ def compile_pareto(
     include_all_configs: bool = False,
     search_space: Optional[Dict[str, Any]] = None,
     prune_subagents: bool = True,
+    subagent_score_thresholds: Optional[Dict[str, float]] = None,
     openclaw_lobster_workflow_file: Optional[str] = None,
+    workflow_loops: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Compile Pareto-optimal workflow configurations.
 
@@ -280,6 +405,7 @@ def compile_pareto(
         include_all_configs: whether to include non-Pareto configs
         search_space: optional model/budget/structure constraints for search
         prune_subagents: whether to Pareto-prune subagent settings before Cartesian expansion
+        subagent_score_thresholds: optional per-subagent minimum score thresholds
     """
     # Normalize workflow_type aliases
     if workflow_type.lower() in ["math500", "math-500"]:
@@ -313,15 +439,29 @@ def compile_pareto(
             "latency_file": latency_file,
             "search_space": search_space,
             "prune_subagents": bool(prune_subagents and not include_all_configs),
+            "subagent_score_thresholds": dict(subagent_score_thresholds or {}),
             "openclaw_lobster_workflow_file": openclaw_lobster_workflow_file,
+            "workflow_loops": workflow_loops,
         },
         "configs": [],
     }
 
     reporter.step("Aggregating sub-agent stats")
     raw_df_subagents = build_subagent_stats(df)
-    df_subagents = workflow_module.normalize_subagent_stats(raw_df_subagents)
-    pre_counts = {agent: len(agent_df) for agent, agent_df in df_subagents.items()}
+    normalized_subagents = workflow_module.normalize_subagent_stats(raw_df_subagents)
+    threshold_before_counts = {agent: len(agent_df) for agent, agent_df in normalized_subagents.items()}
+    df_subagents = _apply_subagent_score_thresholds(normalized_subagents, subagent_score_thresholds)
+    threshold_after_counts = {agent: len(agent_df) for agent, agent_df in df_subagents.items()}
+    if threshold_before_counts and subagent_score_thresholds:
+        reporter.detail(
+            "subagent configs "
+            f"{sum(threshold_before_counts.values())} -> {sum(threshold_after_counts.values())} "
+            "(score thresholds)"
+        )
+    compiled["metadata"]["subagent_counts_before_threshold"] = threshold_before_counts
+    compiled["metadata"]["subagent_counts_after_threshold"] = threshold_after_counts
+
+    pre_counts = dict(threshold_after_counts)
     should_prune = bool(prune_subagents and not include_all_configs)
     if should_prune:
         pruned_subagents: Dict[str, pd.DataFrame] = {}
@@ -344,6 +484,7 @@ def compile_pareto(
 
     metadata = {
         "search_space": search_space,
+        "workflow_loops": workflow_loops,
         "show_progress": True,
         "progress_desc": "compile predict configs",
     }
@@ -356,8 +497,10 @@ def compile_pareto(
 
     reporter.step("Building compiled config payload")
     pareto_df = pd.DataFrame()
+    runtime_budget_presets: Dict[str, Dict[str, Any]] = {}
     if workflow_df.empty:
         compiled["configs"] = []
+        compiled["runtime_budget_presets"] = runtime_budget_presets
     else:
         pareto_df = filter_pareto_optimal(
             workflow_df,
@@ -375,6 +518,8 @@ def compile_pareto(
             show_progress=False,
         )
         compiled["configs"] = compiled_result["configs"]
+        runtime_budget_presets = _select_runtime_budget_presets(compiled["configs"])
+        compiled["runtime_budget_presets"] = runtime_budget_presets
         if include_all_configs:
             compiled["all_configs"] = compiled_result.get("all_configs", [])
 
@@ -385,7 +530,13 @@ def compile_pareto(
         json.dump(compiled, f, indent=2)
 
     plot_path = Path(plot_file) if plot_file else output_path.with_name(f"{output_path.stem}_latency_vs_score.png")
-    plot_written = _save_latency_score_plot(workflow_df, pareto_df, plot_path, workflow_type)
+    plot_written = _save_latency_score_plot(
+        workflow_df,
+        pareto_df,
+        plot_path,
+        workflow_type,
+        runtime_budget_presets=runtime_budget_presets,
+    )
     subagent_plot_files = _save_subagent_latency_score_plots(
         raw_df_subagents,
         output_path.parent / "figures",

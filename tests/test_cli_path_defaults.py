@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from workflow_compiler.core import cli
+from workflow_compiler.runtime.selector import RUNTIME_PREFERENCE_BUDGET_PRESETS
 
 
 def _write_json(path: Path, payload):
@@ -472,10 +473,10 @@ def test_runtime_infer_rejects_deprecated_nested_runtime_budget_key_in_yaml(tmp_
     ("raw_budget", "expected_budget"),
     [
         ("0.2", 0.2),
-        ("low", 0.001),
-        ("medium", 0.5),
-        ("high", 0.9),
-        ("xhigh", 0.999),
+        ("low", RUNTIME_PREFERENCE_BUDGET_PRESETS["low"]),
+        ("medium", RUNTIME_PREFERENCE_BUDGET_PRESETS["medium"]),
+        ("high", RUNTIME_PREFERENCE_BUDGET_PRESETS["high"]),
+        ("xhigh", RUNTIME_PREFERENCE_BUDGET_PRESETS["xhigh"]),
     ],
 )
 def test_runtime_infer_preference_parses_budget_values(monkeypatch, tmp_path: Path, raw_budget, expected_budget):

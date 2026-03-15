@@ -22,6 +22,14 @@ from workflow_compiler.dsl.structures import apply_structure
 DEFAULT_EXECUTION_MODE = "sequential"
 
 
+@dataclass(frozen=True)
+class WorkflowLoopSpec:
+    name: str
+    count: int
+    map_nodes: Tuple[str, ...]
+    reduce_node: Optional[str] = None
+
+
 def _state_ref_parts(obj: Any) -> Optional[Tuple[str, str]]:
     if not isinstance(obj, dict):
         return None
@@ -447,6 +455,150 @@ def _compose_latency_sequential_with_initial(
     return total
 
 
+def _parse_workflow_loops(raw: Any) -> List[WorkflowLoopSpec]:
+    if raw in (None, "", []):
+        return []
+    if not isinstance(raw, list):
+        raise ValueError("workflow_loops must be a list of loop definitions.")
+
+    loops: List[WorkflowLoopSpec] = []
+    seen_names: Set[str] = set()
+    assigned_nodes: Dict[str, str] = {}
+
+    for idx, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise ValueError(f"workflow_loops[{idx}] must be a mapping.")
+
+        name = str(item.get("name") or "").strip()
+        if not name:
+            raise ValueError(f"workflow_loops[{idx}].name must be a non-empty string.")
+        if name in seen_names:
+            raise ValueError(f"workflow_loops contains duplicate loop name '{name}'.")
+        seen_names.add(name)
+
+        count = item.get("count")
+        if not isinstance(count, int) or count < 1:
+            raise ValueError(f"workflow_loops[{idx}].count must be an integer >= 1.")
+
+        raw_map_nodes = item.get("map_nodes")
+        if not isinstance(raw_map_nodes, list) or not raw_map_nodes:
+            raise ValueError(f"workflow_loops[{idx}].map_nodes must be a non-empty list.")
+        map_nodes: List[str] = []
+        seen_local: Set[str] = set()
+        for node_idx, value in enumerate(raw_map_nodes):
+            node_id = str(value or "").strip()
+            if not node_id:
+                raise ValueError(
+                    f"workflow_loops[{idx}].map_nodes[{node_idx}] must be a non-empty string."
+                )
+            if node_id in seen_local:
+                raise ValueError(
+                    f"workflow_loops[{idx}] contains duplicate node '{node_id}' in map_nodes."
+                )
+            seen_local.add(node_id)
+            owner = assigned_nodes.get(node_id)
+            if owner is not None:
+                raise ValueError(
+                    f"workflow_loops node '{node_id}' is assigned to both '{owner}' and '{name}'."
+                )
+            assigned_nodes[node_id] = name
+            map_nodes.append(node_id)
+
+        reduce_raw = item.get("reduce_node")
+        reduce_node: Optional[str] = None
+        if reduce_raw is not None:
+            reduce_node = str(reduce_raw or "").strip()
+            if not reduce_node:
+                raise ValueError(f"workflow_loops[{idx}].reduce_node must be a non-empty string.")
+            if reduce_node in seen_local:
+                raise ValueError(
+                    f"workflow_loops[{idx}].reduce_node '{reduce_node}' cannot also appear in map_nodes."
+                )
+            owner = assigned_nodes.get(reduce_node)
+            if owner is not None:
+                raise ValueError(
+                    f"workflow_loops node '{reduce_node}' is assigned to both '{owner}' and '{name}'."
+                )
+            assigned_nodes[reduce_node] = name
+
+        loops.append(
+            WorkflowLoopSpec(
+                name=name,
+                count=count,
+                map_nodes=tuple(map_nodes),
+                reduce_node=reduce_node,
+            )
+        )
+
+    return loops
+
+
+def _compose_latency_with_workflow_loops(
+    spec: Dict[str, Any],
+    ctx: Any,
+    retry_pattern: Optional[RetryPattern],
+    p_initial_correct: Any,
+    default_composer: "LatencyComposer",
+) -> Any:
+    loops = _parse_workflow_loops((getattr(ctx, "metadata", None) or {}).get("workflow_loops"))
+    if not loops:
+        return default_composer(ctx, retry_pattern, p_initial_correct)
+
+    nodes = spec.get("nodes", []) or []
+    active_agent_nodes = [
+        node
+        for node in nodes
+        if node.get("type") == "agent" and node.get("id") and ctx.enabled(str(node.get("name")))
+    ]
+    node_by_id = {str(node.get("id")): node for node in active_agent_nodes}
+    multipliers: Dict[str, int] = {node_id: 1 for node_id in node_by_id}
+
+    for loop in loops:
+        for node_id in loop.map_nodes:
+            node = node_by_id.get(node_id)
+            if node is None:
+                raise ValueError(
+                    f"workflow_loops loop '{loop.name}' references unknown or inactive map node '{node_id}'."
+                )
+            multipliers[node_id] = loop.count
+
+        if loop.reduce_node is not None:
+            node = node_by_id.get(loop.reduce_node)
+            if node is None:
+                raise ValueError(
+                    f"workflow_loops loop '{loop.name}' references unknown or inactive reduce node '{loop.reduce_node}'."
+                )
+            operator = _node_operator(node, node)
+            if operator not in {"map_reduce", "map-reduce", "reduce"}:
+                raise ValueError(
+                    f"workflow_loops loop '{loop.name}' reduce node '{loop.reduce_node}' "
+                    f"must use operator map_reduce or reduce, found '{operator}'."
+                )
+            multipliers[loop.reduce_node] = 1
+
+    total: Any = 0.0
+    for node in active_agent_nodes:
+        node_id = str(node.get("id"))
+        agent = str(node.get("name"))
+        total = total + ctx.lat(agent, 0.0) * multipliers[node_id]
+
+    if retry_pattern is None or not retry_pattern.fixer_agent or not retry_pattern.fixer_node_ids:
+        return total
+
+    fixer_agent = retry_pattern.fixer_agent
+    max_attempts = len(retry_pattern.fixer_node_ids)
+    p_fix = ctx.acc(fixer_agent, 0.0)
+    expected_attempts = _expected_fix_attempts(
+        p_initial_correct=p_initial_correct,
+        p_fix_code=p_fix,
+        max_attempts=max_attempts,
+    )
+    extra_attempts = expected_attempts - max_attempts
+    if np.any(np.asarray(extra_attempts) != 0):
+        total = total + extra_attempts * ctx.lat(fixer_agent, 0.0)
+    return total
+
+
 LatencyComposer = Callable[[Any, Optional[RetryPattern], Any], Any]
 
 _LATENCY_COMPOSERS: Dict[str, LatencyComposer] = {
@@ -509,7 +661,13 @@ def auto_backward(workflow: Any, payload: Dict[str, Any]) -> pd.DataFrame:
 
     mode = validate_execution_mode(getattr(workflow, "execution_mode", DEFAULT_EXECUTION_MODE))
     composer = _LATENCY_COMPOSERS[mode]
-    workflow_latency = composer(ctx, retry_pattern, p_initial_for_latency)
+    workflow_latency = _compose_latency_with_workflow_loops(
+        spec,
+        ctx,
+        retry_pattern,
+        p_initial_for_latency,
+        composer,
+    )
 
     return ctx.finish(
         workflow_accuracy=workflow_accuracy,

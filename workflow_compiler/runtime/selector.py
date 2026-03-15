@@ -4,6 +4,14 @@ from __future__ import annotations
 from typing import List, Dict, Any, Optional
 
 
+RUNTIME_PREFERENCE_BUDGET_PRESETS: Dict[str, float] = {
+    "low": 0.01,
+    "medium": 0.5,
+    "high": 0.9,
+    "xhigh": 0.999,
+}
+
+
 def _get_metric(cfg: Dict[str, Any], key: str, default: float = 0.0) -> float:
     metrics = cfg.get("metrics", {})
     return float(metrics.get(key, cfg.get(key, default)))
