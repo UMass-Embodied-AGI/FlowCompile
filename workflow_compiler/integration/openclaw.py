@@ -17,6 +17,7 @@ from workflow_compiler.workflows.openclaw_lobster.parser import parse_lobster_wo
 MANIFEST_SCHEMA_VERSION = "flowcompile.openclaw.manifest.v1"
 SESSION_SCHEMA_VERSION = "flowcompile.openclaw.session.v1"
 VALID_JUDGE_MODES = {"strict_exact", "semantic_llm"}
+OPENCLAW_SEMANTIC_JUDGE_MODEL = "gpt-oss-120b"
 WORKFLOW_FILE_NAME = "workflow.lobster.yaml"
 FLOWCOMPILE_DIR_NAME = "flowcompile"
 SESSION_DIR_NAME = "session"
@@ -136,6 +137,10 @@ def normalize_openclaw_agent_policies(raw: Any) -> Dict[str, Dict[str, Any]]:
         normalized[agent_name] = normalized_policy
 
     return normalized
+
+
+def _requires_semantic_judge_model(policies: Dict[str, Dict[str, Any]]) -> bool:
+    return any(str(policy.get("mode") or "").strip().lower() == "semantic_llm" for policy in policies.values())
 
 
 def _resolve_workflow_dir(workflow_dir: str) -> Path:
@@ -1005,13 +1010,21 @@ def validate_openclaw_config_payload(cfg: Dict[str, Any], *, config_path: Option
     if not model_config:
         raise ValueError("model_config is required")
     try:
-        load_model_config_payload(model_config, base_dir=config_base)
+        resolved_model_config = load_model_config_payload(model_config, base_dir=config_base)
     except (FileNotFoundError, ValueError) as exc:
         raise ValueError(str(exc)) from exc
 
     normalized_policies = normalize_openclaw_agent_policies(cfg.get("openclaw_agent_policies"))
     if not normalized_policies:
         raise ValueError("openclaw_agent_policies is required for openclaw_lobster profiling")
+    if _requires_semantic_judge_model(normalized_policies):
+        models = resolved_model_config.get("models") if isinstance(resolved_model_config, dict) else None
+        if not isinstance(models, dict) or OPENCLAW_SEMANTIC_JUDGE_MODEL not in models:
+            raise ValueError(
+                "model_config.models must include "
+                f"{OPENCLAW_SEMANTIC_JUDGE_MODEL!r} when any openclaw_agent_policies judge.mode "
+                "is 'semantic_llm'; FlowCompile profiling uses that alias as the semantic judge model"
+            )
 
     spec = parse_lobster_workflow(str(workflow_path))
     agent_ids = [str(node.get("id")) for node in (spec.get("nodes") or []) if node.get("type") == "agent" and node.get("id")]

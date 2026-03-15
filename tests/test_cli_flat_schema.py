@@ -42,6 +42,10 @@ def _write_model_config(path: Path, *, local_url: str = "http://127.0.0.1:4000",
                 '    api_type: "openai"',
                 '    api_key: "dummy"',
                 '    hf_model_name: "Qwen/Qwen3-4B"',
+                "  gpt-oss-120b:",
+                '    api_type: "openai"',
+                '    api_key: "dummy"',
+                '    hf_model_name: "openai/gpt-oss-120b"',
             ]
         ),
     )

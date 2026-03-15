@@ -8,6 +8,29 @@ import pytest
 from workflow_compiler.integration import openclaw
 
 
+def _openclaw_model_config_text(*, include_semantic_judge_model: bool = True) -> str:
+    lines = [
+        "endpoints:",
+        '  local_base_url: "http://127.0.0.1:4000"',
+        '  profile_base_url: "http://profile-host:4000"',
+        "models:",
+        "  qwen35-9b-awq:",
+        '    api_type: "openai"',
+        '    api_key: "dummy"',
+        '    hf_model_name: "QuantTrio/Qwen3.5-9B-AWQ"',
+    ]
+    if include_semantic_judge_model:
+        lines.extend(
+            [
+                "  gpt-oss-120b:",
+                '    api_type: "openai"',
+                '    api_key: "dummy"',
+                '    hf_model_name: "openai/gpt-oss-120b"',
+            ]
+        )
+    return "\n".join(lines) + "\n"
+
+
 def _write_json(path: Path, payload) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -359,7 +382,7 @@ def test_validate_openclaw_config_payload_accepts_config_relative_bundle_paths(t
     model_config = flowcompile_dir / "model-config.yaml"
     config_path = flowcompile_dir / "flowcompile_openclaw.yaml"
     _write_json(training_path, _training_payload())
-    model_config.write_text("models: {}\n", encoding="utf-8")
+    model_config.write_text(_openclaw_model_config_text(), encoding="utf-8")
 
     cfg = {
         "schema_version": "flowcompile.flat.v1",
@@ -419,6 +442,91 @@ def test_validate_openclaw_config_payload_accepts_config_relative_bundle_paths(t
     assert summary["normalized_policies"]["classify"]["mode"] == "strict_exact"
 
 
+def test_validate_openclaw_config_payload_rejects_missing_semantic_judge_model(tmp_path: Path):
+    bundle = _write_workflow_bundle(tmp_path)
+    flowcompile_dir = bundle / "flowcompile"
+    training_path = flowcompile_dir / "flowcompile_training.json"
+    model_config = flowcompile_dir / "model-config.yaml"
+    config_path = flowcompile_dir / "flowcompile_openclaw.yaml"
+    _write_json(training_path, _training_payload())
+    model_config.write_text(_openclaw_model_config_text(include_semantic_judge_model=False), encoding="utf-8")
+
+    cfg = {
+        "schema_version": "flowcompile.flat.v1",
+        "experiment_id": bundle.name,
+        "experiment_root": ".",
+        "workflow_type": "openclaw_lobster",
+        "model_config": "model-config.yaml",
+        "openclaw_lobster_workflow_file": "../workflow.lobster.yaml",
+        "profile_training_data": "flowcompile_training.json",
+        "predict_trace_data": "flowcompile_training.json",
+        "search_axes": ["model", "budget"],
+        "search_models": ["qwen35-9b-awq"],
+        "search_budgets": [10, 200],
+        "profile_models": ["qwen35-9b-awq"],
+        "latency_models": ["QuantTrio/Qwen3.5-9B-AWQ"],
+        "openclaw_agent_policies": {
+            "summarize_each": {
+                "required_fields": ["summary"],
+                "judge": {"mode": "semantic_llm", "prompt": "GT {ground_truth_field} Pred {predicted_field}"},
+            },
+            "classify": {"required_fields": ["category"], "judge": {"mode": "strict_exact"}},
+            "overview": {
+                "required_fields": ["overview_paragraph"],
+                "judge": {"mode": "semantic_llm", "prompt": "GT {ground_truth_field} Pred {predicted_field}"},
+            },
+            "ask_questions": {
+                "required_fields": ["question"],
+                "judge": {"mode": "semantic_llm", "prompt": "GT {ground_truth_field} Pred {predicted_field}"},
+            },
+            "draft_replies": {
+                "required_fields": ["draft_body"],
+                "judge": {"mode": "semantic_llm", "prompt": "GT {ground_truth_field} Pred {predicted_field}"},
+            },
+        },
+    }
+
+    with pytest.raises(ValueError, match="gpt-oss-120b"):
+        openclaw.validate_openclaw_config_payload(cfg, config_path=str(config_path))
+
+
+def test_validate_openclaw_config_payload_allows_missing_semantic_judge_model_for_strict_exact_only(tmp_path: Path):
+    bundle = _write_workflow_bundle(tmp_path)
+    flowcompile_dir = bundle / "flowcompile"
+    training_path = flowcompile_dir / "flowcompile_training.json"
+    model_config = flowcompile_dir / "model-config.yaml"
+    config_path = flowcompile_dir / "flowcompile_openclaw.yaml"
+    _write_json(training_path, _training_payload())
+    model_config.write_text(_openclaw_model_config_text(include_semantic_judge_model=False), encoding="utf-8")
+
+    cfg = {
+        "schema_version": "flowcompile.flat.v1",
+        "experiment_id": bundle.name,
+        "experiment_root": ".",
+        "workflow_type": "openclaw_lobster",
+        "model_config": "model-config.yaml",
+        "openclaw_lobster_workflow_file": "../workflow.lobster.yaml",
+        "profile_training_data": "flowcompile_training.json",
+        "predict_trace_data": "flowcompile_training.json",
+        "search_axes": ["model", "budget"],
+        "search_models": ["qwen35-9b-awq"],
+        "search_budgets": [10, 200],
+        "profile_models": ["qwen35-9b-awq"],
+        "latency_models": ["QuantTrio/Qwen3.5-9B-AWQ"],
+        "openclaw_agent_policies": {
+            "summarize_each": {"required_fields": ["summary"], "judge": {"mode": "strict_exact"}},
+            "classify": {"required_fields": ["category"], "judge": {"mode": "strict_exact"}},
+            "overview": {"required_fields": ["overview_paragraph"], "judge": {"mode": "strict_exact"}},
+            "ask_questions": {"required_fields": ["question"], "judge": {"mode": "strict_exact"}},
+            "draft_replies": {"required_fields": ["draft_body"], "judge": {"mode": "strict_exact"}},
+        },
+    }
+
+    summary = openclaw.validate_openclaw_config_payload(cfg, config_path=str(config_path))
+
+    assert "overview" in summary["workflow_agents"]
+
+
 def test_validate_openclaw_config_payload_rejects_unknown_threshold_agent(tmp_path: Path):
     bundle = _write_workflow_bundle(tmp_path)
     flowcompile_dir = bundle / "flowcompile"
@@ -426,7 +534,7 @@ def test_validate_openclaw_config_payload_rejects_unknown_threshold_agent(tmp_pa
     model_config = flowcompile_dir / "model-config.yaml"
     config_path = flowcompile_dir / "flowcompile_openclaw.yaml"
     _write_json(training_path, _training_payload())
-    model_config.write_text("models: {}\n", encoding="utf-8")
+    model_config.write_text(_openclaw_model_config_text(), encoding="utf-8")
 
     cfg = {
         "schema_version": "flowcompile.flat.v1",

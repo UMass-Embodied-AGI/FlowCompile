@@ -12,6 +12,7 @@ Use this skill when OpenClaw is running on its own machine and needs to optimize
 - Do not enter the GPU node.
 - Do not manage model serving.
 - Assume FlowCompile can reach models through the `model_config` in the authored flat YAML, whether that payload is written inline or via a referenced YAML file. That model config defines `endpoints.local_base_url` for `get-latency` and `endpoints.profile_base_url` for `profile`.
+- If any authored `openclaw_agent_policies[*].judge.mode` is `semantic_llm`, include `gpt-oss-120b` under `model_config.models`. FlowCompile profiling uses that alias as the default semantic judge model.
 - Assume the workflow already exists as a runnable bundle directory under `workflows/<bundle>/`.
 - Treat `workflows/<bundle>/flowcompile/` as the experiment root for all FlowCompile artifacts.
 
@@ -40,8 +41,15 @@ Use this skill when OpenClaw is running on its own machine and needs to optimize
 
 ## Authoring Notes
 
+- `analyze-demo` depends on a completed demo export. A paused or partially completed session is not enough; finish the demo run before authoring YAML.
+- If the demo workflow has external side effects, prefer a workflow-provided debug/dry-run/mock path. If no safe side-effect-free capture path exists, stop and ask the human before finishing the demo.
 - Write judge prompts only after reviewing the captured demo samples.
 - If `analyze-demo` reports any workflow LLM step with zero captured samples, reject that demo and capture another one before authoring YAML.
 - Infer `workflow_loops` from the workflow structure exposed in the demo analysis, then confirm loop counts with the human before finalizing them.
 - Treat observed demo counts in `candidate_workflow_loops` as hints only, not as proof that a loop does or does not exist.
 - Omit `predict_subagent_score_thresholds` unless the human explicitly wants pruning.
+- Before finalizing YAML, verify this checklist:
+  - `required_fields` came from `demo_analysis.json`
+  - every `openclaw_agent_policies` key exactly matches a workflow step id
+  - confirmed `workflow_loops` counts with the human
+  - included `gpt-oss-120b` in `model_config.models` whenever any semantic OpenClaw judge is present

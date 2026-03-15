@@ -44,6 +44,8 @@ model_config:
       hf_model_name: "QuantTrio/Qwen3.5-27B-AWQ"
       enable_thinking_budget: true
       thinking_budget_reasoning_parser: "qwen3"
+    # Keep this alias whenever any OpenClaw judge uses mode=semantic_llm.
+    # FlowCompile profiling uses gpt-oss-120b as the default semantic judge model.
     gpt-oss-120b:
       api_type: "openai"
       api_key: "sk-proxy-demo-key"

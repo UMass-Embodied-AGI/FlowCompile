@@ -36,12 +36,17 @@ models:
     api_type: "openai"
     api_key: "sk-proxy-demo-key"
     hf_model_name: "QuantTrio/Qwen3.5-9B-AWQ"
+  gpt-oss-120b:
+    api_type: "openai"
+    api_key: "sk-proxy-demo-key"
+    hf_model_name: "openai/gpt-oss-120b"
 ```
 
 Rules:
 
 - `get-latency` uses `endpoints.local_base_url`.
 - `profile` uses `endpoints.profile_base_url` for both sub-agent calls and judge calls.
+- If any `openclaw_agent_policies[*].judge.mode` is `semantic_llm`, `model_config.models` must include `gpt-oss-120b`. FlowCompile profiling uses that alias as the default semantic judge model.
 - Keep model aliases and `hf_model_name` mappings under `models`.
 - Do not repeat endpoint URLs under every model entry in new configs.
 - FlowCompile resolves `model_config` to an in-memory mapping after loading the flat config, even if the author wrote it as a path.
@@ -58,6 +63,10 @@ model_config:
       api_type: "openai"
       api_key: "sk-proxy-demo-key"
       hf_model_name: "QuantTrio/Qwen3.5-9B-AWQ"
+    gpt-oss-120b:
+      api_type: "openai"
+      api_key: "sk-proxy-demo-key"
+      hf_model_name: "openai/gpt-oss-120b"
 ```
 
 Useful optional keys:
@@ -125,6 +134,7 @@ Rules:
 - Derive `required_fields` from the captured JSON outputs in `demo_analysis.json`.
 - Use `strict_exact` when the output is an exact categorical/string field and the right answer should match exactly after normalization.
 - Use `semantic_llm` for summaries, free-form text, or multi-constraint outputs.
+- `strict_exact` does not require an LLM judge call. Any `semantic_llm` OpenClaw judge requires `gpt-oss-120b` to be present in `model_config.models`.
 - For `semantic_llm`, write the full `prompt` after reviewing the demo examples for that agent.
 - The semantic prompt can reference:
   - `{input_prompt}`
@@ -133,6 +143,15 @@ Rules:
   - `{predicted_field}`
   - `{ground_truth_json}`
   - `{predicted_json}`
+
+## OpenClaw Authoring Checklist
+
+Before finalizing the YAML:
+
+- Read `<bundle-dir>/flowcompile/demo_analysis.json`.
+- Derive `required_fields` directly from the agent analysis.
+- Confirm `workflow_loops` counts with the human instead of blindly copying observed counts.
+- Include `gpt-oss-120b` in `model_config.models` whenever any OpenClaw semantic judge is present.
 
 ## workflow_loops
 
