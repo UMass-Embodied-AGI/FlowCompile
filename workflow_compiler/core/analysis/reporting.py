@@ -28,7 +28,8 @@ def calculate_latency_from_trace(
     latency_data: Dict,
     llm_configs: Dict,
     workflow_type: str = 'math',
-    return_per_sample: bool = False
+    return_per_sample: bool = False,
+    model_config_path: Optional[str] = None,
 ) -> Dict:
     """
     Calculate workflow latency across all samples in a trace file.
@@ -88,7 +89,11 @@ def calculate_latency_from_trace(
                         
                         if agent_name in llm_configs:
                             setting = llm_configs[agent_name]
-                            model_name = extract_model_name(setting, return_hf_name=True)
+                            model_name = extract_model_name(
+                                setting,
+                                return_hf_name=True,
+                                model_config_path=model_config_path,
+                            )
                         else:
                             # If a step has no LLM mapping and no token usage, treat it as non-LLM.
                             if (not input_tokens) and (not output_tokens):
@@ -102,12 +107,15 @@ def calculate_latency_from_trace(
                         if agent_name == "simple_math_solver":
                             config_temp = os.path.join(os.path.dirname(trace_file), "config_info.json")
                             uniform_setting = json.load(open(config_temp, 'r')).get('original_config', {}).get('uniform_setting', '')
-                            if uniform_setting == "qwq-32b":
-                                model_name = "Qwen/QwQ-32B"
-                            elif uniform_setting == "ds-32b":
-                                model_name = "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B"
-                            else:
-                                raise ValueError(f"Unknown uniform_setting '{uniform_setting}' for simple_math_solver in {trace_file}")
+                            if not uniform_setting:
+                                raise ValueError(
+                                    f"Missing uniform_setting for simple_math_solver in {trace_file}"
+                                )
+                            model_name = extract_model_name(
+                                uniform_setting,
+                                return_hf_name=True,
+                                model_config_path=model_config_path,
+                            )
                         
                         if not model_name or model_name not in latency_data:
                             raise ValueError(f"Model name '{model_name}' for agent '{agent_name}' (original: {step.get('agent', '')}) not found in latency data. Available agents: {list(llm_configs.keys())}")
@@ -249,7 +257,8 @@ def process_config_directory(
     latency_data: Dict,
     workflow_type: str = 'math',
     return_per_sample: bool = False,
-    require_predicted_latency: bool = False
+    require_predicted_latency: bool = False,
+    model_config_path: Optional[str] = None,
 ) -> Optional[Dict]:
     """
     Process a single config directory and extract all relevant information.
@@ -327,7 +336,12 @@ def process_config_directory(
     per_sample_data = {}
     if trace_file.exists():
         trace_result = calculate_latency_from_trace(
-            trace_file, latency_data, llm_configs, workflow_type, return_per_sample
+            trace_file,
+            latency_data,
+            llm_configs,
+            workflow_type,
+            return_per_sample,
+            model_config_path=model_config_path,
         )
         actual_latency = trace_result['mean_latency']
         if return_per_sample:
@@ -384,7 +398,8 @@ def consolidate_results(
     exclude_folders: Optional[List[str]] = None,
     workflow_type: str = 'math',
     return_per_sample: bool = False,
-    require_predicted_latency: bool = False
+    require_predicted_latency: bool = False,
+    model_config_path: Optional[str] = None,
 ) -> List[Dict]:
     """
     Consolidate results from multiple experiment directories.
@@ -420,7 +435,12 @@ def consolidate_results(
         
         for config_dir in config_dirs:
             result = process_config_directory(
-                config_dir, latency_data, workflow_type, return_per_sample, require_predicted_latency
+                config_dir,
+                latency_data,
+                workflow_type,
+                return_per_sample,
+                require_predicted_latency,
+                model_config_path=model_config_path,
             )
             if result:
                 result['experiment'] = results_dir.name

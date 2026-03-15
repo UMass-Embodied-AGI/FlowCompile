@@ -800,6 +800,7 @@ def _build_runtime_knn_router(
         latency_file=str(latency_file),
         workflow_type=workflow_type,
         data_files=str(validate_file),
+        model_config_path=_cfg_flat_get(cfg, "model_config") or _cfg_get(cfg, "models", "config_path"),
     )
 
     embedding_cache_file = (

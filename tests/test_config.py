@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 from workflow_compiler.core.llm.config import (
     load_config,
+    load_model_alias_to_hf_name_map,
     parse_llm_config,
     create_experiment_config,
     ExperimentConfig,
@@ -16,6 +17,31 @@ from workflow_compiler.core.llm.config import (
 
 class TestConfigLoading:
     """Tests for config loading."""
+
+    def test_load_model_alias_to_hf_name_map(self, tmp_path: Path):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "\n".join(
+                [
+                    "models:",
+                    "  qwen3-4b:",
+                    "    hf_model_name: Qwen/Qwen3-4B",
+                    "  worker-route:",
+                    "    model: qwen3-8b",
+                    "    hf_model_name: Qwen/Qwen3-8B",
+                    "  no-hf:",
+                    "    model: missing-hf",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        mapping = load_model_alias_to_hf_name_map(str(config_path))
+
+        assert mapping["qwen3-4b"] == "Qwen/Qwen3-4B"
+        assert mapping["worker-route"] == "Qwen/Qwen3-8B"
+        assert mapping["qwen3-8b"] == "Qwen/Qwen3-8B"
+        assert "missing-hf" not in mapping
     
     def test_parse_llm_config(self):
         """Test LLM config string parsing."""

@@ -15,44 +15,14 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
+from workflow_compiler.core.llm.config import load_model_alias_to_hf_name_map
+
 
 # ============================================================================
 # Model Name Mapping
 # ============================================================================
 
-MODEL_TO_HF_NAME = {
-    "qwen3-4b-thinking": "Qwen/Qwen3-4B-Thinking-2507",
-    "deepseek-r1-qwen-1_5b": "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
-    "ds-32b": "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
-    "qwen3-30b-a3b-thinking": "Qwen/Qwen3-30B-A3B-Thinking-2507",
-    "gpt-oss-20b": "openai/gpt-oss-20b",
-    "gpt-oss-120b": "openai/gpt-oss-120b",
-    "qwen3-0.6b": "Qwen/Qwen3-0.6B",
-    "qwen3-1.7b": "Qwen/Qwen3-1.7B",
-    "qwen3-4b": "Qwen/Qwen3-4B",
-    "qwen3-8b": "Qwen/Qwen3-8B",
-    "qwen3-14b": "Qwen/Qwen3-14B",
-    "qwen3-32b": "Qwen/Qwen3-32B",
-    "qwen3-30b-a3b": "Qwen/Qwen3-30B-A3B",
-    "qwen35-0.8b": "Qwen/Qwen3.5-0.8B",
-    "qwen35-2b": "Qwen/Qwen3.5-2B",
-    "qwen35-4b": "Qwen/Qwen3.5-4B",
-    "qwen35-9b": "Qwen/Qwen3.5-9B",
-    "qwen35-9b-awq": "QuantTrio/Qwen3.5-9B-AWQ",
-    "qwen35-27b": "Qwen/Qwen3.5-27B",
-    "qwen35-27b-awq": "QuantTrio/Qwen3.5-27B-AWQ",
-    "qwen35-0.8b-local": "Qwen/Qwen3.5-0.8B",
-    "qwen35-2b-local": "Qwen/Qwen3.5-2B",
-    "qwen35-4b-local": "Qwen/Qwen3.5-4B",
-    "qwen35-9b-local": "Qwen/Qwen3.5-9B",
-    "qwen35-27b-local": "Qwen/Qwen3.5-27B",
-    "ministral-14b": "mistralai/Ministral-3-14B-Reasoning-2512",
-    "qwq-32b": "Qwen/QwQ-32B",
-    "ds-32b": "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
-}
-
-
-def get_hf_model_name(model_name: str) -> str:
+def get_hf_model_name(model_name: str, model_config_path: Optional[str] = None) -> str:
     """
     Get HuggingFace model name from short name.
     
@@ -62,22 +32,25 @@ def get_hf_model_name(model_name: str) -> str:
     Returns:
         HuggingFace model name (e.g., 'Qwen/Qwen3-4B')
     """
-    resolved = MODEL_TO_HF_NAME.get(model_name)
+    alias_to_hf_name = load_model_alias_to_hf_name_map(model_config_path)
+    resolved = alias_to_hf_name.get(model_name)
     if resolved is not None:
         return resolved
-    # Keep local alias compatibility (e.g., qwen35-4b-local -> qwen35-4b).
-    if model_name.endswith("-local"):
-        stripped = model_name[:-len("-local")]
-        resolved = MODEL_TO_HF_NAME.get(stripped)
-        if resolved is not None:
-            return resolved
-    return model_name
+
+    if model_name in alias_to_hf_name.values() or "/" in model_name:
+        return model_name
+
+    raise ValueError(
+        f"Unable to resolve HuggingFace model name for alias '{model_name}'. "
+        "Add a matching entry with hf_model_name to the model config YAML."
+    )
 
 
 def extract_model_name(
     setting: str,
     return_hf_name: bool = False,
-    return_budget: bool = False
+    return_budget: bool = False,
+    model_config_path: Optional[str] = None,
 ) -> Union[str, Tuple[str, int]]:
     """
     Extract model name and optionally budget from setting string.
@@ -123,12 +96,12 @@ def extract_model_name(
         
         # Return model name with budget
         if return_hf_name:
-            return get_hf_model_name(base_name), budget
+            return get_hf_model_name(base_name, model_config_path=model_config_path), budget
         return base_name, budget
     
     # Return just model name
     if return_hf_name:
-        return get_hf_model_name(base_name)
+        return get_hf_model_name(base_name, model_config_path=model_config_path)
     return base_name
 
 
@@ -175,7 +148,7 @@ def load_latency_data(latency_file: str) -> Dict[str, Dict[str, float]]:
         raise FileNotFoundError(f"Latency file not found: {latency_file}")
 
 
-def get_default_latency_data() -> Dict[str, Dict[str, float]]:
+def get_default_latency_data(model_config_path: Optional[str] = None) -> Dict[str, Dict[str, float]]:
     """
     Get a conservative fallback latency table.
 
@@ -189,14 +162,15 @@ def get_default_latency_data() -> Dict[str, Dict[str, float]]:
             "prefill_latency_per_token": 0.0002,
             "decode_latency_per_token": 0.002,
         }
-        for hf_name in MODEL_TO_HF_NAME.values()
+        for hf_name in sorted(set(load_model_alias_to_hf_name_map(model_config_path).values()))
     }
 
 def calculate_latency(
     input_tokens: int,
     output_tokens: int,
     model_name: str,
-    latency_data: Dict[str, Dict[str, float]]
+    latency_data: Dict[str, Dict[str, float]],
+    model_config_path: Optional[str] = None,
 ) -> float:
     """
     Calculate latency for a given model and token counts.
@@ -211,7 +185,11 @@ def calculate_latency(
         Total latency in seconds
     """
     # Extract base model name and get HF name
-    hf_model_name = extract_model_name(model_name, return_hf_name=True)
+    hf_model_name = extract_model_name(
+        model_name,
+        return_hf_name=True,
+        model_config_path=model_config_path,
+    )
     
     if hf_model_name in latency_data:
         io_latency = latency_data[hf_model_name]
@@ -226,7 +204,8 @@ def calculate_latency(
 def calculate_trace_latency(
     trace_data: Dict,
     latency_data: Dict[str, Dict[str, float]],
-    llm_configs: Optional[Dict[str, str]] = None
+    llm_configs: Optional[Dict[str, str]] = None,
+    model_config_path: Optional[str] = None,
 ) -> float:
     """
     Calculate total latency for a trace (all steps).
@@ -263,7 +242,13 @@ def calculate_trace_latency(
         if not model_name:
             model_name = 'qwen3-4b'
         
-        step_latency = calculate_latency(input_tokens, output_tokens, model_name, latency_data)
+        step_latency = calculate_latency(
+            input_tokens,
+            output_tokens,
+            model_name,
+            latency_data,
+            model_config_path=model_config_path,
+        )
         total_latency += step_latency
     
     return total_latency

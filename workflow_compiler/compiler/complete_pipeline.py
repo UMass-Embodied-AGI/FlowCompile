@@ -18,11 +18,10 @@ import pandas as pd
 import seaborn as sns
 
 from workflow_compiler.core.analysis import (
-    MODEL_TO_HF_NAME as model_to_hf_name,
     calculate_latency as wfc_calculate_latency,
     load_latency_data as wfc_load_latency_data,
 )
-from workflow_compiler.core.analysis.modeling import extract_model_size_key
+from workflow_compiler.core.analysis.modeling import extract_model_size_key, get_hf_model_name
 from workflow_compiler.core.analysis.prediction import predict_workflow_by_level_simplified
 
 
@@ -61,9 +60,21 @@ def load_latency_data(latency_file):
     return wfc_load_latency_data(latency_file)
 
 
-def calculate_latency(input_tokens, output_tokens, model_name, model_to_io_latency_per_token):
+def calculate_latency(
+    input_tokens,
+    output_tokens,
+    model_name,
+    model_to_io_latency_per_token,
+    model_config_path=None,
+):
     """Calculate latency for a given configuration."""
-    return wfc_calculate_latency(input_tokens, output_tokens, model_name, model_to_io_latency_per_token)
+    return wfc_calculate_latency(
+        input_tokens,
+        output_tokens,
+        model_name,
+        model_to_io_latency_per_token,
+        model_config_path=model_config_path,
+    )
 
 
 def convert_data_to_consolidated(
@@ -71,6 +82,7 @@ def convert_data_to_consolidated(
     trace_training_data_filename,
     latency_benchmark_filename,
     output_dir,
+    model_config_path=None,
 ):
     """Convert detailed results to consolidated data with latency calculations."""
     detailed_results = {}
@@ -114,6 +126,7 @@ def convert_data_to_consolidated(
                     output_tokens,
                     setting,
                     model_to_io_latency_per_token,
+                    model_config_path=model_config_path,
                 )
 
                 saved_data = deepcopy(metadata)
@@ -142,7 +155,7 @@ def convert_data_to_consolidated(
 # ============================================================================
 
 
-def create_analysis_dataframe(acc_files, latency_file):
+def create_analysis_dataframe(acc_files, latency_file, model_config_path=None):
     """Create dataframe for analysis plots."""
     latency_data = json.load(open(latency_file, encoding="utf-8"))
     model_to_io_latency_per_token = {}
@@ -164,7 +177,7 @@ def create_analysis_dataframe(acc_files, latency_file):
             for cfg_name in subagent_data:
                 cfg_data = subagent_data[cfg_name]
                 raw_model = cfg_data["model"]
-                model = model_to_hf_name.get(raw_model, raw_model)
+                model = get_hf_model_name(raw_model, model_config_path=model_config_path)
                 if model not in model_to_io_latency_per_token and raw_model in model_to_io_latency_per_token:
                     model = raw_model
                 if model not in model_to_io_latency_per_token:
@@ -203,9 +216,9 @@ def create_analysis_dataframe(acc_files, latency_file):
     return df
 
 
-def generate_analysis_plots(acc_files, latency_file, output_dir, gpu_type="h100"):
+def generate_analysis_plots(acc_files, latency_file, output_dir, gpu_type="h100", model_config_path=None):
     """Generate analysis plots for accuracy vs latency/budget."""
-    df = create_analysis_dataframe(acc_files, latency_file)
+    df = create_analysis_dataframe(acc_files, latency_file, model_config_path=model_config_path)
 
     sorted_models = sorted(df["model"].unique(), key=safe_model_sort_key)
     colors = sns.color_palette("colorblind", len(sorted_models))

@@ -15,6 +15,7 @@ from pathlib import Path
 import pandas as pd
 from tqdm import tqdm
 
+from workflow_compiler.core.analysis.modeling import get_hf_model_name
 from workflow_compiler.core.llm.config import parse_config
 
 logger = logging.getLogger(__name__)
@@ -64,7 +65,8 @@ def consolidate_validation_data(
     latency_file: str,
     workflow_type: str,
     model_to_hf_name: Optional[Dict[str, str]] = None,
-    data_files: Optional[Union[str, List[str]]] = None
+    data_files: Optional[Union[str, List[str]]] = None,
+    model_config_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Consolidate validation set data from raw profiling data into a query-indexed structure.
@@ -93,11 +95,6 @@ def consolidate_validation_data(
     logger.info("="*80)
     logger.info("CONSOLIDATING VALIDATION DATA FROM RAW PROFILING DATA")
     logger.info("="*80)
-    
-    # Default model mapping if not provided
-    if model_to_hf_name is None:
-        from workflow_compiler.core.analysis import MODEL_TO_HF_NAME as default_mapping
-        model_to_hf_name = default_mapping
     
     # Load and merge detailed_results from multiple files
     detailed_results = {}
@@ -237,7 +234,21 @@ def consolidate_validation_data(
                     else:
                         model_base = setting_parts[0]
                     
-                    hf_model_name = model_to_hf_name.get(model_base)
+                    if model_to_hf_name is not None:
+                        hf_model_name = model_to_hf_name.get(model_base)
+                        if hf_model_name is None:
+                            if model_base in model_to_hf_name.values() or "/" in model_base:
+                                hf_model_name = model_base
+                            else:
+                                raise ValueError(
+                                    f"Unable to resolve HuggingFace model name for alias '{model_base}'. "
+                                    "Add a matching entry with hf_model_name to the model config YAML."
+                                )
+                    else:
+                        hf_model_name = get_hf_model_name(
+                            model_base,
+                            model_config_path=model_config_path,
+                        )
                     
                     if hf_model_name and hf_model_name in model_to_io_latency_per_token:
                         io_latency = model_to_io_latency_per_token[hf_model_name]

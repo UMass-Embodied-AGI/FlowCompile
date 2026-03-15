@@ -649,6 +649,7 @@ def test_runtime_infer_knn_router_builds_router_from_experiment_defaults(monkeyp
     assert captured["consolidate"]["trace_data_file"] == f"results/{exp}/01_profile/aggregated_training_data.json"
     assert captured["consolidate"]["latency_file"] == f"results/{exp}/01_profile/latency_benchmark.json"
     assert captured["consolidate"]["data_files"] == "data.jsonl"
+    assert captured["consolidate"]["model_config_path"] == "configs/config.yaml"
     assert captured["infer_runtime"]["router"] is not None
 
 

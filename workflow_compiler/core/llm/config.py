@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -152,6 +153,56 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     return config or {}
 
 
+@lru_cache(maxsize=None)
+def _load_model_alias_to_hf_name_map_cached(resolved_config_path: str) -> Dict[str, str]:
+    path = Path(resolved_config_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Configuration file not found: {path}")
+
+    with open(path, "r", encoding="utf-8") as f:
+        payload = yaml.safe_load(f) or {}
+
+    if not isinstance(payload, dict):
+        raise ValueError(f"Invalid model config format: {path}")
+
+    models = payload.get("models")
+    if not isinstance(models, dict):
+        raise ValueError(f"Invalid model config: missing top-level 'models' map in {path}")
+
+    alias_to_hf_name: Dict[str, str] = {}
+    for cfg_key, model_cfg in models.items():
+        if not isinstance(model_cfg, dict):
+            continue
+
+        hf_name = model_cfg.get("hf_model_name")
+        if not hf_name:
+            continue
+
+        aliases = {str(cfg_key).strip()}
+        explicit_alias = model_cfg.get("model")
+        if explicit_alias:
+            aliases.add(str(explicit_alias).strip())
+
+        for alias in aliases:
+            if not alias:
+                continue
+            existing = alias_to_hf_name.get(alias)
+            if existing is not None and existing != str(hf_name):
+                raise ValueError(
+                    f"Conflicting hf_model_name values for alias '{alias}' in {path}: "
+                    f"{existing!r} vs {hf_name!r}"
+                )
+            alias_to_hf_name[alias] = str(hf_name)
+
+    return alias_to_hf_name
+
+
+def load_model_alias_to_hf_name_map(config_path: Optional[str] = None) -> Dict[str, str]:
+    """Load alias -> HuggingFace model mapping from the model YAML."""
+    resolved_path = str(get_config_path(config_path).resolve())
+    return dict(_load_model_alias_to_hf_name_map_cached(resolved_path))
+
+
 def parse_llm_config(config_str: str) -> Dict[str, Any]:
     """Parse config string via model-name extraction helpers."""
     from workflow_compiler.core.analysis.modeling import extract_model_name
@@ -202,6 +253,7 @@ __all__ = [
     "ExperimentConfig",
     "get_config_path",
     "load_config",
+    "load_model_alias_to_hf_name_map",
     "parse_llm_config",
     "create_experiment_config",
     "validate_config",
