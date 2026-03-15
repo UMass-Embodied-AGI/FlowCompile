@@ -114,6 +114,7 @@ def get_experiment_config(
     search_budgets: Optional[List[Any]] = None,
     workflow_type: Optional[str] = None,
     training_data_path: Optional[str] = None,
+    experiment_root: Optional[str] = None,
     openclaw_lobster_workflow_file: Optional[str] = None,
     openclaw_agent_policies: Optional[Dict[str, Any]] = None,
     judge_policies: Optional[Dict[str, Any]] = None,
@@ -134,7 +135,7 @@ def get_experiment_config(
     Returns:
         Dictionary with configuration parameters
     """
-    results_dir = Path("results") / experiment_id
+    results_dir = Path(experiment_root) if experiment_root else Path("results") / experiment_id
     profile_dir = results_dir / "01_profile"
     
     if not results_dir.exists() and not training_data_path:
@@ -276,6 +277,7 @@ class BenchmarkConfig:
         search_budgets: Optional[List[Any]] = None,
         workflow_type: Optional[str] = None,
         training_data_path: Optional[str] = None,
+        experiment_root: Optional[str] = None,
         openclaw_lobster_workflow_file: Optional[str] = None,
         openclaw_agent_policies: Optional[Dict[str, Any]] = None,
         judge_policies: Optional[Dict[str, Any]] = None,
@@ -291,6 +293,7 @@ class BenchmarkConfig:
             search_budgets=search_budgets,
             workflow_type=workflow_type,
             training_data_path=training_data_path,
+            experiment_root=experiment_root,
             openclaw_lobster_workflow_file=openclaw_lobster_workflow_file,
             openclaw_agent_policies=openclaw_agent_policies,
             judge_policies=judge_policies,
@@ -1429,6 +1432,7 @@ async def run_profiling(
     livecodebench_public_test_file: Optional[str] = None,
     workflow_type: Optional[str] = None,
     training_data_path: Optional[str] = None,
+    experiment_root: Optional[str] = None,
     openclaw_lobster_workflow_file: Optional[str] = None,
     openclaw_agent_policies: Optional[Dict[str, Any]] = None,
     judge_policies: Optional[Any] = None,
@@ -1439,6 +1443,7 @@ async def run_profiling(
         search_budgets=search_budgets,
         workflow_type=workflow_type,
         training_data_path=training_data_path,
+        experiment_root=experiment_root,
         openclaw_lobster_workflow_file=openclaw_lobster_workflow_file,
         openclaw_agent_policies=openclaw_agent_policies,
         judge_policies=judge_policies,

@@ -706,6 +706,26 @@ def test_cmd_compile_profile_forwards_openclaw_lobster_inputs(monkeypatch):
     assert captured["judge_policies"] == _judge_policies()
 
 
+def test_cmd_compile_profile_forwards_experiment_root(monkeypatch, tmp_path: Path):
+    captured = {}
+
+    async def fake_run_profiling(**kwargs):
+        captured.update(kwargs)
+        return tmp_path / "workspace" / "workflows" / "outlook-past-24h" / "flowcompile" / "01_profile" / "benchmark_00000000_000000"
+
+    monkeypatch.setattr(cli, "run_profiling", fake_run_profiling)
+
+    cfg = _flat_cfg(experiment_root=".")
+    cfg[cli._CONFIG_PATH_META_KEY] = str(
+        tmp_path / "workspace" / "workflows" / "outlook-past-24h" / "flowcompile" / "flowcompile_openclaw.yaml"
+    )
+
+    assert cli.cmd_compile_profile(_empty_profile_args(), cfg) == 0
+    assert captured["experiment_root"] == str(
+        tmp_path / "workspace" / "workflows" / "outlook-past-24h" / "flowcompile"
+    )
+
+
 def test_cmd_compile_predict_forwards_openclaw_lobster_workflow_file(monkeypatch, tmp_path: Path):
     monkeypatch.chdir(tmp_path)
     exp = "exp_flat"

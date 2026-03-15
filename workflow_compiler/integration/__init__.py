@@ -8,7 +8,6 @@ from workflow_compiler.integration.openclaw import (
     demo_run_openclaw,
     infer_candidate_workflow_loops,
     normalize_openclaw_agent_policies,
-    stage_openclaw_workspace,
     validate_openclaw_config_payload,
 )
 
@@ -20,6 +19,5 @@ __all__ = [
     "demo_run_openclaw",
     "infer_candidate_workflow_loops",
     "normalize_openclaw_agent_policies",
-    "stage_openclaw_workspace",
     "validate_openclaw_config_payload",
 ]

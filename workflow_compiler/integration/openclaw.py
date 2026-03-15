@@ -1,17 +1,14 @@
-"""Helpers for staging, capturing, and validating OpenClaw Lobster workflows."""
+"""Helpers for capturing and validating bundled OpenClaw Lobster workflows."""
 from __future__ import annotations
 
 import json
 import os
-import shlex
 import shutil
 import subprocess
 import textwrap
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
-
-import yaml
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from workflow_compiler.core.llm.config import load_model_config_payload
 from workflow_compiler.workflows.openclaw_lobster.parser import parse_lobster_workflow
@@ -20,29 +17,10 @@ from workflow_compiler.workflows.openclaw_lobster.parser import parse_lobster_wo
 MANIFEST_SCHEMA_VERSION = "flowcompile.openclaw.manifest.v1"
 SESSION_SCHEMA_VERSION = "flowcompile.openclaw.session.v1"
 VALID_JUDGE_MODES = {"strict_exact", "semantic_llm"}
-
-_TEXT_FILE_SUFFIXES = {
-    "",
-    ".bash",
-    ".js",
-    ".json",
-    ".jsonl",
-    ".md",
-    ".py",
-    ".sh",
-    ".txt",
-    ".yaml",
-    ".yml",
-    ".zsh",
-}
-_KNOWN_OLD_WORKSPACE_ROOTS = (
-    "/home/junyan/.openclaw/workspace",
-    "/root/.openclaw/workspace",
-)
-_KNOWN_OLD_FLOWCOMPILE_ROOTS = (
-    "/home/junyan/code/FlowCompile",
-    "/proj/inf-scaling/junyan/workflow_compiler/codebase",
-)
+WORKFLOW_FILE_NAME = "workflow.lobster.yaml"
+FLOWCOMPILE_DIR_NAME = "flowcompile"
+SESSION_DIR_NAME = "session"
+CONFIG_FILE_NAME = "flowcompile_openclaw.yaml"
 
 
 def _now_iso() -> str:
@@ -160,127 +138,72 @@ def normalize_openclaw_agent_policies(raw: Any) -> Dict[str, Dict[str, Any]]:
     return normalized
 
 
-def _detect_source_root(workflow_path: Path) -> Path:
-    resolved = workflow_path.resolve()
-    for candidate in (resolved.parent, *resolved.parents):
-        workflows_dir = candidate / "workflows"
-        if workflows_dir.exists():
-            try:
-                resolved.relative_to(workflows_dir)
-                return candidate
-            except ValueError:
-                pass
-        if (candidate / "bin").exists() and (candidate / "prompts").exists():
-            return candidate
-    return resolved.parent
+def _resolve_workflow_dir(workflow_dir: str) -> Path:
+    bundle_dir = Path(workflow_dir).expanduser().resolve()
+    if not bundle_dir.exists():
+        raise FileNotFoundError(f"OpenClaw workflow directory not found: {bundle_dir}")
+    if not bundle_dir.is_dir():
+        raise ValueError(f"OpenClaw workflow directory must be a directory: {bundle_dir}")
 
-
-def _iter_text_files(root: Path) -> Iterable[Path]:
-    for path in root.rglob("*"):
-        if path.is_file() and path.suffix.lower() in _TEXT_FILE_SUFFIXES:
-            yield path
-
-
-def _normalize_text_files(staged_root: Path, repo_root: Path) -> None:
-    replacements: List[Tuple[str, str]] = [
-        ("#!/home/junyan/miniconda3/bin/python", "#!/usr/bin/env python3"),
-    ]
-    replacements.extend((old, str(staged_root)) for old in _KNOWN_OLD_WORKSPACE_ROOTS)
-    replacements.extend((old, str(repo_root)) for old in _KNOWN_OLD_FLOWCOMPILE_ROOTS)
-
-    for path in _iter_text_files(staged_root):
-        try:
-            text = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            continue
-        updated = text
-        for old, new in replacements:
-            updated = updated.replace(old, new)
-        if updated != text:
-            path.write_text(updated, encoding="utf-8")
-
-
-def _inject_step_ids_into_workflow(workflow_path: Path) -> None:
-    payload = yaml.safe_load(workflow_path.read_text(encoding="utf-8")) or {}
-    steps = payload.get("steps")
-    if not isinstance(steps, list):
-        raise ValueError(f"Invalid Lobster workflow (missing steps list): {workflow_path}")
-
-    changed = False
-    for step in steps:
-        if not isinstance(step, dict):
-            continue
-        step_id = str(step.get("id") or "").strip()
-        command = step.get("command")
-        if not step_id or not isinstance(command, str) or not command.strip():
-            continue
-        if "FLOWCOMPILE_OPENCLAW_STEP_ID" in command:
-            continue
-        prefix = f"export FLOWCOMPILE_OPENCLAW_STEP_ID={shlex.quote(step_id)}\n"
-        step["command"] = prefix + command
-        changed = True
-
-    if changed:
-        workflow_path.write_text(
-            yaml.safe_dump(payload, sort_keys=False, allow_unicode=True),
-            encoding="utf-8",
+    workflow_path = bundle_dir / WORKFLOW_FILE_NAME
+    if not workflow_path.exists():
+        raise FileNotFoundError(
+            f"OpenClaw workflow bundle must contain {WORKFLOW_FILE_NAME}: {bundle_dir}"
         )
 
+    parse_lobster_workflow(str(workflow_path))
+    return bundle_dir
 
-def stage_openclaw_workspace(
-    workflow_file: str,
-    experiment_id: str,
-    *,
-    source_root: Optional[str] = None,
-    model_config: str = "configs/config.qwen35.local.yaml",
-) -> Path:
-    workflow_path = Path(workflow_file).resolve()
-    if not workflow_path.exists():
-        raise FileNotFoundError(f"OpenClaw workflow file not found: {workflow_path}")
 
-    repo_root = Path.cwd().resolve()
-    source_root_path = Path(source_root).resolve() if source_root else _detect_source_root(workflow_path)
-    if not source_root_path.exists():
-        raise FileNotFoundError(f"OpenClaw source root not found: {source_root_path}")
+def _bundle_paths(workflow_dir: Path) -> Dict[str, Path]:
+    flowcompile_dir = workflow_dir / FLOWCOMPILE_DIR_NAME
+    session_dir = flowcompile_dir / SESSION_DIR_NAME
+    return {
+        "workflow_dir": workflow_dir,
+        "workflow_file": workflow_dir / WORKFLOW_FILE_NAME,
+        "flowcompile_dir": flowcompile_dir,
+        "manifest_path": flowcompile_dir / "manifest.json",
+        "training_data_path": flowcompile_dir / "flowcompile_training.json",
+        "analysis_path": flowcompile_dir / "demo_analysis.json",
+        "config_path": flowcompile_dir / CONFIG_FILE_NAME,
+        "session_path": session_dir / "session.json",
+        "capture_path": session_dir / "llm_capture.jsonl",
+    }
 
-    try:
-        workflow_rel = workflow_path.relative_to(source_root_path)
-    except ValueError as exc:
-        raise ValueError(
-            f"workflow_file '{workflow_path}' must be contained by source_root '{source_root_path}'"
-        ) from exc
 
-    openclaw_dir = repo_root / "results" / experiment_id / "openclaw"
-    staged_root = openclaw_dir / "staged_workspace"
-    if staged_root.exists():
-        shutil.rmtree(staged_root)
-    shutil.copytree(source_root_path, staged_root)
-
-    _normalize_text_files(staged_root, repo_root)
-    staged_workflow = staged_root / workflow_rel
-    _inject_step_ids_into_workflow(staged_workflow)
-    parse_lobster_workflow(str(staged_workflow))
-
-    session_dir = openclaw_dir / "session"
-    manifest_path = openclaw_dir / "manifest.json"
-    manifest = {
+def _build_manifest(workflow_dir: Path, *, model_config: Optional[str] = None) -> Dict[str, Any]:
+    paths = _bundle_paths(workflow_dir)
+    manifest: Dict[str, Any] = {
         "schema_version": MANIFEST_SCHEMA_VERSION,
         "generated_at": _now_iso(),
-        "experiment_id": experiment_id,
-        "repo_root": str(repo_root),
-        "source_root": str(source_root_path),
-        "source_workflow_file": str(workflow_path),
-        "staged_root": str(staged_root),
-        "staged_workflow_file": str(staged_workflow),
-        "training_data_path": str(openclaw_dir / "flowcompile_training.json"),
-        "analysis_path": str(openclaw_dir / "demo_analysis.json"),
-        "config_path": str(openclaw_dir / "flowcompile_openclaw.yaml"),
-        "session_path": str(session_dir / "session.json"),
-        "capture_path": str(session_dir / "llm_capture.jsonl"),
-        "model_config": model_config,
+        "experiment_id": workflow_dir.name,
+        "workflow_dir": str(paths["workflow_dir"]),
+        "workflow_file": str(paths["workflow_file"]),
+        "flowcompile_dir": str(paths["flowcompile_dir"]),
+        "training_data_path": str(paths["training_data_path"]),
+        "analysis_path": str(paths["analysis_path"]),
+        "config_path": str(paths["config_path"]),
+        "session_path": str(paths["session_path"]),
+        "capture_path": str(paths["capture_path"]),
     }
+    if model_config:
+        manifest["model_config"] = str(model_config)
+    return manifest
+
+
+def _prepare_manifest(workflow_dir: str, *, model_config: Optional[str] = None) -> Tuple[Path, Dict[str, Any]]:
+    bundle_dir = _resolve_workflow_dir(workflow_dir)
+    paths = _bundle_paths(bundle_dir)
+    manifest_path = paths["manifest_path"]
+    manifest = _build_manifest(bundle_dir, model_config=model_config)
+    if manifest_path.exists():
+        existing = _read_json(manifest_path)
+        if not manifest.get("model_config") and existing.get("model_config"):
+            manifest["model_config"] = existing["model_config"]
+        if existing.get("generated_at"):
+            manifest["generated_at"] = existing["generated_at"]
     _write_json(manifest_path, manifest)
-    return manifest_path
+    return manifest_path, manifest
 
 
 def _build_node_shim(shim_path: Path, capture_path: Path, real_node_bin: str) -> None:
@@ -443,6 +366,18 @@ def _resume_token(payload: Dict[str, Any]) -> Optional[str]:
     return token if isinstance(token, str) and token else None
 
 
+def _pause_metadata(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    req = payload.get("requiresApproval")
+    if not isinstance(req, dict):
+        return None
+    items = req.get("items")
+    return {
+        "resume_token": _resume_token(payload),
+        "item_count": len(items) if isinstance(items, list) else 0,
+        "preview": req.get("preview"),
+    }
+
+
 def _load_capture_records(path: Path) -> List[Dict[str, Any]]:
     if not path.exists():
         return []
@@ -522,12 +457,15 @@ def _build_training_data(records: List[Dict[str, Any]], run_label: str) -> List[
 def _finalize_training_export(manifest: Dict[str, Any], session: Dict[str, Any]) -> None:
     capture_path = Path(session["capture_path"])
     records = _load_capture_records(capture_path)
-    run_label = f"{Path(manifest['staged_workflow_file']).stem}:{datetime.now().astimezone().strftime('%Y-%m-%dT%H:%M:%S%z')}"
+    run_label = (
+        f"{Path(manifest['workflow_dir']).name}:"
+        f"{datetime.now().astimezone().strftime('%Y-%m-%dT%H:%M:%S%z')}"
+    )
     training_data = _build_training_data(records, run_label=run_label)
     payload = {
         "metadata": {
             "generated_at": _now_iso(),
-            "workflow": manifest["staged_workflow_file"],
+            "workflow": manifest["workflow_file"],
             "run_label": run_label,
             "llm_call_count": len(training_data),
             "captured_record_count": len(records),
@@ -542,8 +480,14 @@ def _finalize_training_export(manifest: Dict[str, Any], session: Dict[str, Any])
     session["captured_record_count"] = len(records)
 
 
-def demo_run_openclaw(manifest_path: str, *, args_json: Optional[str] = None, env_json: Optional[str] = None) -> Path:
-    manifest = _read_json(Path(manifest_path))
+def demo_run_openclaw(
+    workflow_dir: str,
+    *,
+    args_json: Optional[str] = None,
+    env_json: Optional[str] = None,
+    model_config: Optional[str] = None,
+) -> Path:
+    manifest_path, manifest = _prepare_manifest(workflow_dir, model_config=model_config)
     session_path = Path(manifest["session_path"])
     capture_path = Path(manifest["capture_path"])
     capture_path.parent.mkdir(parents=True, exist_ok=True)
@@ -560,11 +504,11 @@ def demo_run_openclaw(manifest_path: str, *, args_json: Optional[str] = None, en
             "--mode",
             "tool",
             "--file",
-            manifest["staged_workflow_file"],
+            manifest["workflow_file"],
             "--args-json",
             normalized_args_json,
         ],
-        cwd=Path(manifest["staged_root"]),
+        cwd=Path(manifest["workflow_dir"]),
         env=env,
     )
 
@@ -572,12 +516,16 @@ def demo_run_openclaw(manifest_path: str, *, args_json: Optional[str] = None, en
         "schema_version": SESSION_SCHEMA_VERSION,
         "updated_at": _now_iso(),
         "manifest_path": str(Path(manifest_path).resolve()),
+        "workflow_dir": manifest["workflow_dir"],
+        "workflow_file": manifest["workflow_file"],
         "capture_path": str(capture_path),
         "status": payload.get("status") or "unknown",
         "args_json": json.loads(normalized_args_json),
         "env_overrides": env_overrides,
         "resume_token": _resume_token(payload),
         "last_payload": payload,
+        "last_approval_payload": payload.get("requiresApproval"),
+        "pause_metadata": _pause_metadata(payload),
     }
     if payload.get("status") == "ok":
         session["status"] = "completed"
@@ -589,14 +537,14 @@ def demo_run_openclaw(manifest_path: str, *, args_json: Optional[str] = None, en
 
 
 def demo_resume_openclaw(
-    session_path: str,
+    workflow_dir: str,
     *,
     approve: str = "yes",
     env_json: Optional[str] = None,
 ) -> Path:
-    session_file = Path(session_path)
+    manifest_path, manifest = _prepare_manifest(workflow_dir)
+    session_file = Path(manifest["session_path"])
     session = _read_json(session_file)
-    manifest = _read_json(Path(session["manifest_path"]))
     resume_token = str(session.get("resume_token") or "").strip()
     if not resume_token:
         raise ValueError(f"Session does not contain a resume token: {session_file}")
@@ -615,7 +563,7 @@ def demo_resume_openclaw(
             "--approve",
             str(approve or "yes"),
         ],
-        cwd=Path(manifest["staged_root"]),
+        cwd=Path(manifest["workflow_dir"]),
         env=env,
     )
     session.update(
@@ -625,6 +573,8 @@ def demo_resume_openclaw(
             "resume_token": _resume_token(payload),
             "last_payload": payload,
             "env_overrides": env_overrides,
+            "last_approval_payload": payload.get("requiresApproval"),
+            "pause_metadata": _pause_metadata(payload),
         }
     )
     if payload.get("status") == "ok":
@@ -750,8 +700,8 @@ def infer_candidate_workflow_loops(spec: Dict[str, Any], counts_by_agent: Dict[s
     return loops
 
 
-def analyze_openclaw_demo(manifest_path: str) -> Path:
-    manifest = _read_json(Path(manifest_path))
+def analyze_openclaw_demo(workflow_dir: str) -> Path:
+    manifest_path, manifest = _prepare_manifest(workflow_dir)
     training_payload = _read_json(Path(manifest["training_data_path"]))
     training_data = training_payload.get("training_data") or []
     if not isinstance(training_data, list):
@@ -766,7 +716,7 @@ def analyze_openclaw_demo(manifest_path: str) -> Path:
             continue
         grouped.setdefault(agent_name, []).append(sample)
 
-    spec = parse_lobster_workflow(manifest["staged_workflow_file"])
+    spec = parse_lobster_workflow(manifest["workflow_file"])
     counts_by_agent = {agent_name: len(samples) for agent_name, samples in grouped.items()}
     agents: Dict[str, Dict[str, Any]] = {}
     for agent_name, samples in sorted(grouped.items()):
@@ -788,8 +738,20 @@ def analyze_openclaw_demo(manifest_path: str) -> Path:
             "examples": examples,
         }
 
-    openclaw_dir = Path(manifest["training_data_path"]).parent
+    openclaw_dir = Path(manifest["flowcompile_dir"])
     analysis_path = Path(manifest["analysis_path"])
+    relative_paths = {
+        "openclaw_lobster_workflow_file": os.path.relpath(Path(manifest["workflow_file"]), openclaw_dir),
+        "profile_training_data": os.path.relpath(Path(manifest["training_data_path"]), openclaw_dir),
+        "predict_trace_data": os.path.relpath(Path(manifest["training_data_path"]), openclaw_dir),
+    }
+    model_config = manifest.get("model_config")
+    if isinstance(model_config, str) and model_config.strip():
+        model_config_path = Path(model_config)
+        if not model_config_path.is_absolute():
+            model_config_path = Path(manifest["workflow_dir"]) / model_config_path
+        if model_config_path.exists():
+            relative_paths["model_config"] = os.path.relpath(model_config_path.resolve(), openclaw_dir)
     payload = {
         "schema_version": "flowcompile.openclaw.analysis.v1",
         "generated_at": _now_iso(),
@@ -814,15 +776,14 @@ def analyze_openclaw_demo(manifest_path: str) -> Path:
         "candidate_workflow_loops": infer_candidate_workflow_loops(spec, counts_by_agent),
         "config_authoring": {
             "suggested_config_path": os.path.relpath(Path(manifest["config_path"]), openclaw_dir),
-            "relative_paths": {
-                "openclaw_lobster_workflow_file": os.path.relpath(Path(manifest["staged_workflow_file"]), openclaw_dir),
-                "profile_training_data": os.path.relpath(Path(manifest["training_data_path"]), openclaw_dir),
-                "predict_trace_data": os.path.relpath(Path(manifest["training_data_path"]), openclaw_dir),
-                "model_config": os.path.relpath(Path(manifest["repo_root"]) / manifest["model_config"], openclaw_dir),
+            "relative_paths": relative_paths,
+            "default_values": {
+                "experiment_root": ".",
             },
             "required_keys": [
                 "schema_version",
                 "experiment_id",
+                "experiment_root",
                 "workflow_type",
                 "model_config",
                 "openclaw_lobster_workflow_file",
@@ -967,9 +928,17 @@ def validate_openclaw_config_payload(cfg: Dict[str, Any], *, config_path: Option
     if not trace_data:
         raise ValueError("predict_trace_data is required")
 
-    workflow_path = Path(str(workflow_file))
-    training_path = Path(str(training_data))
-    trace_path = Path(str(trace_data))
+    config_base = Path(config_path).resolve().parent if config_path else None
+
+    def resolve_path(value: Any) -> Path:
+        path = Path(str(value))
+        if path.is_absolute() or path.exists() or config_base is None:
+            return path
+        return (config_base / path).resolve()
+
+    workflow_path = resolve_path(workflow_file)
+    training_path = resolve_path(training_data)
+    trace_path = resolve_path(trace_data)
     for label, path in (
         ("openclaw_lobster_workflow_file", workflow_path),
         ("profile_training_data", training_path),
@@ -982,7 +951,7 @@ def validate_openclaw_config_payload(cfg: Dict[str, Any], *, config_path: Option
     if not model_config:
         raise ValueError("model_config is required")
     try:
-        load_model_config_payload(model_config)
+        load_model_config_payload(model_config, base_dir=config_base)
     except (FileNotFoundError, ValueError) as exc:
         raise ValueError(str(exc)) from exc
 
@@ -1014,7 +983,6 @@ __all__ = [
     "MANIFEST_SCHEMA_VERSION",
     "SESSION_SCHEMA_VERSION",
     "normalize_openclaw_agent_policies",
-    "stage_openclaw_workspace",
     "demo_run_openclaw",
     "demo_resume_openclaw",
     "analyze_openclaw_demo",

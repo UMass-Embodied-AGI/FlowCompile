@@ -5,11 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from workflow_compiler.integration.openclaw import (
-    analyze_openclaw_demo,
-    stage_openclaw_workspace,
-    validate_openclaw_config_payload,
-)
+from workflow_compiler.integration import openclaw
 
 
 def _write_json(path: Path, payload) -> None:
@@ -17,8 +13,16 @@ def _write_json(path: Path, payload) -> None:
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
-def _write_workflow_root(root: Path) -> Path:
-    workflow_path = root / "workflows" / "outlook.lobster.yaml"
+def _append_jsonl(path: Path, rows) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row) + "\n")
+
+
+def _write_workflow_bundle(root: Path) -> Path:
+    bundle = root / "outlook-past-24h"
+    workflow_path = bundle / "workflow.lobster.yaml"
     workflow_path.parent.mkdir(parents=True, exist_ok=True)
     workflow_path.write_text(
         "\n".join(
@@ -26,22 +30,12 @@ def _write_workflow_root(root: Path) -> Path:
                 "name: outlook-past-24h",
                 "version: 1",
                 "steps:",
-                "  - id: fetch_full_bodies",
-                "    command: ./bin/outlook_fetch_full_bodies",
                 "  - id: summarize_each",
-                "    stdin: $fetch_full_bodies.stdout",
-                "    command: |",
-                "      cd /home/junyan/.openclaw/workspace",
-                "      ./bin/outlook_llm_summarize_each",
+                "    command: ./bin/outlook_llm_summarize_each",
                 "  - id: classify",
-                "    stdin: $fetch_full_bodies.stdout",
-                "    command: |",
-                "      cat <<'__SUM__'",
-                "      $summarize_each.stdout",
-                "      __SUM__",
-                "      ./bin/outlook_llm_classify",
+                "    stdin: $summarize_each.stdout",
+                "    command: ./bin/outlook_llm_classify",
                 "  - id: overview",
-                "    stdin: $fetch_full_bodies.stdout",
                 "    command: |",
                 "      cat <<'__SUM__'",
                 "      $summarize_each.stdout",
@@ -51,39 +45,41 @@ def _write_workflow_root(root: Path) -> Path:
                 "      __CLS__",
                 "      ./bin/outlook_llm_overview",
                 "  - id: ask_questions",
-                "    stdin: $fetch_full_bodies.stdout",
-                "    command: |",
-                "      cat <<'__OVERVIEW__'",
-                "      $overview.stdout",
-                "      __OVERVIEW__",
-                "      ./bin/outlook_llm_questions",
+                "    stdin: $overview.stdout",
+                "    command: ./bin/outlook_llm_questions",
                 "  - id: draft_replies",
-                "    stdin: $fetch_full_bodies.stdout",
-                "    command: |",
-                "      cat <<'__OVERVIEW__'",
-                "      $overview.stdout",
-                "      __OVERVIEW__",
-                "      cat <<'__ASK__'",
-                "      $ask_questions.stdout",
-                "      __ASK__",
-                "      ./bin/outlook_llm_draft_replies",
+                "    stdin: $ask_questions.stdout",
+                "    command: ./bin/outlook_llm_draft_replies",
             ]
         ),
         encoding="utf-8",
     )
-    script_path = root / "bin" / "run_outlook_past_24h"
-    script_path.parent.mkdir(parents=True, exist_ok=True)
-    script_path.write_text(
-        "\n".join(
-            [
-                "#!/home/junyan/miniconda3/bin/python",
-                'ROOT="/home/junyan/.openclaw/workspace"',
-                'FLOWCOMPILE_ROOT="/home/junyan/code/FlowCompile"',
-            ]
-        ),
-        encoding="utf-8",
-    )
-    return workflow_path
+    return bundle
+
+
+def _capture_records() -> list[dict]:
+    return [
+        {
+            "timestamp": "2026-03-15T12:00:00-05:00",
+            "step_id": "summarize_each",
+            "request_args": {
+                "prompt": "summarize prompt",
+                "input": {"email_id": "e1"},
+                "schema": {"required": ["summary"]},
+            },
+            "details_json": {"summary": "s1"},
+        },
+        {
+            "timestamp": "2026-03-15T12:00:01-05:00",
+            "step_id": "classify",
+            "request_args": {
+                "prompt": "classify prompt",
+                "input": {"email_id": "e1"},
+                "schema": {"required": ["category"]},
+            },
+            "details_json": {"category": "reply_required"},
+        },
+    ]
 
 
 def _training_payload() -> dict:
@@ -147,36 +143,90 @@ def _training_payload() -> dict:
     }
 
 
-def test_stage_openclaw_workspace_rewrites_stale_paths(monkeypatch, tmp_path: Path):
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir(parents=True, exist_ok=True)
-    monkeypatch.chdir(repo_root)
-    workflow_path = _write_workflow_root(tmp_path / "source_openclaw")
+def test_demo_run_openclaw_creates_bundle_local_artifacts(monkeypatch, tmp_path: Path):
+    bundle = _write_workflow_bundle(tmp_path)
 
-    manifest_path = stage_openclaw_workspace(str(workflow_path), "exp_stage")
+    def fake_build_runtime_env(session_path: Path, capture_path: Path, env_overrides: dict[str, str]) -> dict[str, str]:
+        return {
+            "FLOWCOMPILE_OPENCLAW_CAPTURE_FILE": str(capture_path),
+            **env_overrides,
+        }
 
-    manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
-    staged_workflow = Path(manifest["staged_workflow_file"])
-    staged_script = Path(manifest["staged_root"]) / "bin" / "run_outlook_past_24h"
-    staged_workflow_text = staged_workflow.read_text(encoding="utf-8")
-    staged_script_text = staged_script.read_text(encoding="utf-8")
+    def fake_run_lobster_payload(cmd, cwd: Path, env: dict[str, str]) -> dict:
+        assert cwd == bundle.resolve()
+        assert cmd[:4] == ["lobster", "run", "--mode", "tool"]
+        assert "--file" in cmd
+        _append_jsonl(Path(env["FLOWCOMPILE_OPENCLAW_CAPTURE_FILE"]), _capture_records())
+        return {"ok": True, "status": "ok"}
 
-    assert "FLOWCOMPILE_OPENCLAW_STEP_ID=summarize_each" in staged_workflow_text
-    assert "/home/junyan/.openclaw/workspace" not in staged_workflow_text
-    assert "#!/usr/bin/env python3" in staged_script_text
-    assert "/home/junyan/code/FlowCompile" not in staged_script_text
+    monkeypatch.setattr(openclaw, "_build_runtime_env", fake_build_runtime_env)
+    monkeypatch.setattr(openclaw, "_run_lobster_payload", fake_run_lobster_payload)
+
+    session_path = openclaw.demo_run_openclaw(str(bundle), args_json='{"client_id":"demo"}')
+
+    manifest = json.loads((bundle / "flowcompile" / "manifest.json").read_text(encoding="utf-8"))
+    session = json.loads(Path(session_path).read_text(encoding="utf-8"))
+    training = json.loads((bundle / "flowcompile" / "flowcompile_training.json").read_text(encoding="utf-8"))
+
+    assert manifest["workflow_dir"] == str(bundle.resolve())
+    assert manifest["workflow_file"] == str((bundle / "workflow.lobster.yaml").resolve())
+    assert Path(manifest["session_path"]) == bundle / "flowcompile" / "session" / "session.json"
+    assert session["status"] == "completed"
+    assert session["llm_call_count"] == 2
+    assert training["metadata"]["workflow"] == str((bundle / "workflow.lobster.yaml").resolve())
+    assert len(training["training_data"]) == 2
 
 
-def test_analyze_openclaw_demo_emits_candidate_loops(monkeypatch, tmp_path: Path):
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir(parents=True, exist_ok=True)
-    monkeypatch.chdir(repo_root)
-    workflow_path = _write_workflow_root(tmp_path / "source_openclaw")
-    manifest_path = stage_openclaw_workspace(str(workflow_path), "exp_analyze")
-    manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+def test_demo_resume_openclaw_updates_pause_state(monkeypatch, tmp_path: Path):
+    bundle = _write_workflow_bundle(tmp_path)
+    manifest_path, manifest = openclaw._prepare_manifest(str(bundle))
+    _write_json(
+        Path(manifest["session_path"]),
+        {
+            "schema_version": openclaw.SESSION_SCHEMA_VERSION,
+            "manifest_path": str(manifest_path),
+            "capture_path": manifest["capture_path"],
+            "status": "needs_approval",
+            "env_overrides": {"EXISTING": "1"},
+            "resume_token": "resume-123",
+        },
+    )
+
+    def fake_build_runtime_env(session_path: Path, capture_path: Path, env_overrides: dict[str, str]) -> dict[str, str]:
+        assert env_overrides["EXISTING"] == "1"
+        return env_overrides
+
+    def fake_run_lobster_payload(cmd, cwd: Path, env: dict[str, str]) -> dict:
+        assert cwd == bundle.resolve()
+        assert cmd == ["lobster", "resume", "--mode", "tool", "--token", "resume-123", "--approve", "yes"]
+        return {
+            "ok": True,
+            "status": "needs_approval",
+            "requiresApproval": {
+                "resumeToken": "resume-456",
+                "items": [{"title": "question"}],
+                "preview": "preview text",
+            },
+        }
+
+    monkeypatch.setattr(openclaw, "_build_runtime_env", fake_build_runtime_env)
+    monkeypatch.setattr(openclaw, "_run_lobster_payload", fake_run_lobster_payload)
+
+    session_path = openclaw.demo_resume_openclaw(str(bundle))
+    session = json.loads(Path(session_path).read_text(encoding="utf-8"))
+
+    assert session["status"] == "needs_approval"
+    assert session["resume_token"] == "resume-456"
+    assert session["pause_metadata"]["item_count"] == 1
+    assert session["last_approval_payload"]["preview"] == "preview text"
+
+
+def test_analyze_openclaw_demo_emits_bundle_local_relative_paths(tmp_path: Path):
+    bundle = _write_workflow_bundle(tmp_path)
+    manifest_path, manifest = openclaw._prepare_manifest(str(bundle))
     _write_json(Path(manifest["training_data_path"]), _training_payload())
 
-    analysis_path = analyze_openclaw_demo(str(manifest_path))
+    analysis_path = openclaw.analyze_openclaw_demo(str(bundle))
     analysis = json.loads(Path(analysis_path).read_text(encoding="utf-8"))
 
     assert analysis["training_data_summary"]["counts_by_agent"]["summarize_each"] == 2
@@ -184,28 +234,31 @@ def test_analyze_openclaw_demo_emits_candidate_loops(monkeypatch, tmp_path: Path
     assert any(loop["reduce_node"] == "overview" for loop in loops if "reduce_node" in loop)
     assert any(loop["map_nodes"] == ["ask_questions", "draft_replies"] for loop in loops)
     assert analysis["agents"]["overview"]["required_fields_intersection"] == ["overview_paragraph"]
+    assert analysis["config_authoring"]["relative_paths"]["openclaw_lobster_workflow_file"] == "../workflow.lobster.yaml"
+    assert analysis["config_authoring"]["relative_paths"]["profile_training_data"] == "flowcompile_training.json"
+    assert analysis["config_authoring"]["default_values"]["experiment_root"] == "."
+    assert "model_config" not in analysis["config_authoring"]["relative_paths"]
+    assert analysis["manifest_path"] == str(manifest_path.resolve())
 
 
-def test_validate_openclaw_config_payload_accepts_valid_config(monkeypatch, tmp_path: Path):
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir(parents=True, exist_ok=True)
-    monkeypatch.chdir(repo_root)
-    workflow_path = _write_workflow_root(tmp_path / "source_openclaw")
-    manifest_path = stage_openclaw_workspace(str(workflow_path), "exp_validate")
-    manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
-    _write_json(Path(manifest["training_data_path"]), _training_payload())
-    model_config = repo_root / "configs" / "config.qwen35.local.yaml"
-    model_config.parent.mkdir(parents=True, exist_ok=True)
+def test_validate_openclaw_config_payload_accepts_config_relative_bundle_paths(tmp_path: Path):
+    bundle = _write_workflow_bundle(tmp_path)
+    flowcompile_dir = bundle / "flowcompile"
+    training_path = flowcompile_dir / "flowcompile_training.json"
+    model_config = flowcompile_dir / "model-config.yaml"
+    config_path = flowcompile_dir / "flowcompile_openclaw.yaml"
+    _write_json(training_path, _training_payload())
     model_config.write_text("models: {}\n", encoding="utf-8")
 
     cfg = {
         "schema_version": "flowcompile.flat.v1",
-        "experiment_id": "exp_validate",
+        "experiment_id": bundle.name,
+        "experiment_root": ".",
         "workflow_type": "openclaw_lobster",
-        "model_config": {"models": {}},
-        "openclaw_lobster_workflow_file": manifest["staged_workflow_file"],
-        "profile_training_data": manifest["training_data_path"],
-        "predict_trace_data": manifest["training_data_path"],
+        "model_config": "model-config.yaml",
+        "openclaw_lobster_workflow_file": "../workflow.lobster.yaml",
+        "profile_training_data": "flowcompile_training.json",
+        "predict_trace_data": "flowcompile_training.json",
         "search_axes": ["model", "budget"],
         "search_models": ["qwen35-9b-awq"],
         "search_budgets": [10, 200],
@@ -249,54 +302,56 @@ def test_validate_openclaw_config_payload_accepts_valid_config(monkeypatch, tmp_
         },
     }
 
-    summary = validate_openclaw_config_payload(cfg)
+    summary = openclaw.validate_openclaw_config_payload(cfg, config_path=str(config_path))
 
     assert "overview" in summary["workflow_agents"]
     assert summary["normalized_policies"]["classify"]["mode"] == "strict_exact"
 
 
-def test_validate_openclaw_config_payload_rejects_unknown_threshold_agent(monkeypatch, tmp_path: Path):
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir(parents=True, exist_ok=True)
-    monkeypatch.chdir(repo_root)
-    workflow_path = _write_workflow_root(tmp_path / "source_openclaw")
-    manifest_path = stage_openclaw_workspace(str(workflow_path), "exp_validate_bad")
-    manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
-    _write_json(Path(manifest["training_data_path"]), _training_payload())
-    model_config = repo_root / "configs" / "config.qwen35.local.yaml"
-    model_config.parent.mkdir(parents=True, exist_ok=True)
+def test_validate_openclaw_config_payload_rejects_unknown_threshold_agent(tmp_path: Path):
+    bundle = _write_workflow_bundle(tmp_path)
+    flowcompile_dir = bundle / "flowcompile"
+    training_path = flowcompile_dir / "flowcompile_training.json"
+    model_config = flowcompile_dir / "model-config.yaml"
+    config_path = flowcompile_dir / "flowcompile_openclaw.yaml"
+    _write_json(training_path, _training_payload())
     model_config.write_text("models: {}\n", encoding="utf-8")
-
-    policies = {
-        "classify": {"required_fields": ["category"], "judge": {"mode": "strict_exact"}},
-    }
-    for agent, field in [
-        ("summarize_each", "summary"),
-        ("overview", "overview_paragraph"),
-        ("ask_questions", "question"),
-        ("draft_replies", "draft_body"),
-    ]:
-        policies[agent] = {
-            "required_fields": [field],
-            "judge": {"mode": "semantic_llm", "prompt": "GT {ground_truth_field} Pred {predicted_field}"},
-        }
 
     cfg = {
         "schema_version": "flowcompile.flat.v1",
-        "experiment_id": "exp_validate_bad",
+        "experiment_id": bundle.name,
+        "experiment_root": ".",
         "workflow_type": "openclaw_lobster",
-        "model_config": {"models": {}},
-        "openclaw_lobster_workflow_file": manifest["staged_workflow_file"],
-        "profile_training_data": manifest["training_data_path"],
-        "predict_trace_data": manifest["training_data_path"],
+        "model_config": "model-config.yaml",
+        "openclaw_lobster_workflow_file": "../workflow.lobster.yaml",
+        "profile_training_data": "flowcompile_training.json",
+        "predict_trace_data": "flowcompile_training.json",
         "search_axes": ["model", "budget"],
         "search_models": ["qwen35-9b-awq"],
         "search_budgets": [10, 200],
         "profile_models": ["qwen35-9b-awq"],
         "latency_models": ["QuantTrio/Qwen3.5-9B-AWQ"],
-        "openclaw_agent_policies": policies,
+        "openclaw_agent_policies": {
+            "summarize_each": {
+                "required_fields": ["summary"],
+                "judge": {"mode": "semantic_llm", "prompt": "GT {ground_truth_field} Pred {predicted_field}"},
+            },
+            "classify": {"required_fields": ["category"], "judge": {"mode": "strict_exact"}},
+            "overview": {
+                "required_fields": ["overview_paragraph"],
+                "judge": {"mode": "semantic_llm", "prompt": "GT {ground_truth_field} Pred {predicted_field}"},
+            },
+            "ask_questions": {
+                "required_fields": ["question"],
+                "judge": {"mode": "semantic_llm", "prompt": "GT {ground_truth_field} Pred {predicted_field}"},
+            },
+            "draft_replies": {
+                "required_fields": ["draft_body"],
+                "judge": {"mode": "semantic_llm", "prompt": "GT {ground_truth_field} Pred {predicted_field}"},
+            },
+        },
         "predict_subagent_score_thresholds": {"missing": 0.5},
     }
 
     with pytest.raises(ValueError, match="unknown subagent"):
-        validate_openclaw_config_payload(cfg)
+        openclaw.validate_openclaw_config_payload(cfg, config_path=str(config_path))

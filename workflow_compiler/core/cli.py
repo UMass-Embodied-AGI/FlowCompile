@@ -43,7 +43,6 @@ from workflow_compiler.integration.openclaw import (
     demo_resume_openclaw,
     demo_run_openclaw,
     normalize_openclaw_agent_policies,
-    stage_openclaw_workspace,
     validate_openclaw_config_payload,
 )
 from workflow_compiler.core.terminal import (
@@ -93,6 +92,7 @@ _RELATIVE_EXISTING_PATH_KEYS = {
     "profile_training_data",
     "predict_trace_data",
 }
+_CONFIG_PATH_META_KEY = "__config_path__"
 
 
 def _is_flat_config(cfg: Dict[str, Any]) -> bool:
@@ -253,11 +253,14 @@ def _validate_flat_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
 def _load_yaml(path: Optional[str]) -> Dict[str, Any]:
     if not path:
         return {}
-    with open(path, "r", encoding="utf-8") as f:
+    resolved_path = Path(path).resolve()
+    with open(resolved_path, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
     validated = _validate_flat_config(data)
-    resolved_model_cfg = _resolve_flat_model_config(validated, path)
-    return _resolve_cfg_relative_paths(resolved_model_cfg, path)
+    resolved_model_cfg = _resolve_flat_model_config(validated, str(resolved_path))
+    resolved = _resolve_cfg_relative_paths(resolved_model_cfg, str(resolved_path))
+    resolved[_CONFIG_PATH_META_KEY] = str(resolved_path)
+    return resolved
 
 
 def _cfg_get(cfg: Dict[str, Any], *keys, default=None):
@@ -286,6 +289,29 @@ def _resolve_cfg_relative_paths(cfg: Dict[str, Any], config_path: str) -> Dict[s
         if relative_candidate.exists():
             resolved[key] = str(relative_candidate.resolve())
     return resolved
+
+
+def _cfg_path(cfg: Dict[str, Any]) -> Optional[Path]:
+    raw = cfg.get(_CONFIG_PATH_META_KEY) if isinstance(cfg, dict) else None
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    return Path(raw)
+
+
+def _cfg_base_dir(cfg: Dict[str, Any]) -> Optional[Path]:
+    config_path = _cfg_path(cfg)
+    return config_path.parent if config_path is not None else None
+
+
+def _cfg_experiment_root(cfg: Dict[str, Any]) -> Optional[Path]:
+    raw = _cfg_flat_get(cfg, "experiment_root")
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    root = Path(raw)
+    base_dir = _cfg_base_dir(cfg)
+    if not root.is_absolute() and base_dir is not None:
+        root = base_dir / root
+    return root.resolve() if root.is_absolute() or base_dir is not None else root
 
 
 def _arg_get(args: Any, name: str, default: Any = None) -> Any:
@@ -666,16 +692,23 @@ def _experiment_id_from_cfg(cfg: Dict[str, Any], fallback: Optional[str] = None)
     )
 
 
-def _exp_root(experiment_id: str) -> Path:
+def _exp_root(experiment_id: str, cfg: Optional[Dict[str, Any]] = None) -> Path:
+    explicit_root = _cfg_experiment_root(cfg or {})
+    if explicit_root is not None:
+        return explicit_root
     return Path("results") / experiment_id
 
 
-def _exp_experiments_root(experiment_id: str) -> Path:
-    return _exp_root(experiment_id) / "04_experiments"
+def _exp_experiments_root(experiment_id: str, cfg: Optional[Dict[str, Any]] = None) -> Path:
+    return _exp_root(experiment_id, cfg=cfg) / "04_experiments"
 
 
-def _exp_experiment_output_dir(experiment_id: str, experiment_name: str) -> str:
-    return str(_exp_experiments_root(experiment_id) / experiment_name)
+def _exp_experiment_output_dir(
+    experiment_id: str,
+    experiment_name: str,
+    cfg: Optional[Dict[str, Any]] = None,
+) -> str:
+    return str(_exp_experiments_root(experiment_id, cfg=cfg) / experiment_name)
 
 
 def _has_cli_flag(cmd_args: List[str], flag: str) -> bool:
@@ -687,13 +720,14 @@ def _resolve_canonical_latency_file(
     explicit_value: Optional[str] = None,
     *,
     label: str = "latency_file",
+    cfg: Optional[Dict[str, Any]] = None,
 ) -> str:
     if not experiment_id:
         raise SystemExit(
-            f"experiment_id is required to resolve {label} at results/<experiment_id>/01_profile/latency_benchmark.json"
+            f"experiment_id is required to resolve the canonical {label} path"
         )
 
-    canonical = _exp_root(experiment_id) / "01_profile" / "latency_benchmark.json"
+    canonical = _exp_root(experiment_id, cfg=cfg) / "01_profile" / "latency_benchmark.json"
     canonical_str = str(canonical)
 
     if explicit_value and Path(explicit_value) != canonical:
@@ -794,7 +828,7 @@ def _build_runtime_knn_router(
     output_dir: Path,
 ):
     experiment_id = _experiment_id_from_cfg(cfg)
-    root = _exp_root(experiment_id) if experiment_id else None
+    root = _exp_root(experiment_id, cfg=cfg) if experiment_id else None
     metadata = compiled_payload.get("metadata", {}) if isinstance(compiled_payload, dict) else {}
     runtime_cfg = _cfg_get(cfg, "runtime", default={})
 
@@ -833,6 +867,7 @@ def _build_runtime_knn_router(
             experiment_id,
             explicit_value=None,
             label="latency_file",
+            cfg=cfg,
         )
     elif metadata.get("latency_file"):
         latency_file = str(metadata.get("latency_file"))
@@ -870,7 +905,7 @@ def _build_runtime_knn_router(
     )
 
     embedding_cache_file = (
-        str(_exp_root(experiment_id) / "01_profile" / "knn_longformer_embeddings.pkl")
+        str(_exp_root(experiment_id, cfg=cfg) / "01_profile" / "knn_longformer_embeddings.pkl")
         if experiment_id
         else str(output_dir / "knn_longformer_embeddings.pkl")
     )
@@ -925,7 +960,7 @@ def cmd_compile_ground_truth(args, cfg):
         or _cfg_get(cfg, "compile", "experiment_id")
         or "default_experiment"
     )
-    profile_root = _exp_root(experiment_id) / "01_profile"
+    profile_root = _exp_root(experiment_id, cfg=cfg) / "01_profile"
     file_path = (
         _arg_get(args, "file_path")
         or _cfg_flat_get(cfg, "ground_truth_file")
@@ -1005,7 +1040,7 @@ def cmd_compile_latency(args, cfg):
     experiment_id = _experiment_id_from_cfg(cfg)
     output_json = _arg_get(args, "output_json") or _cfg_flat_get(cfg, "latency_output_json") or lat.get("output_json")
     if output_json is None and experiment_id:
-        output_json = str(_exp_root(experiment_id) / "01_profile" / "latency_benchmark.json")
+        output_json = str(_exp_root(experiment_id, cfg=cfg) / "01_profile" / "latency_benchmark.json")
     if not models or not output_json:
         raise SystemExit("models and output_json are required for latency benchmarking")
 
@@ -1087,7 +1122,7 @@ def cmd_compile_agent_dataset(args, cfg):
     started = time.perf_counter()
     ad = _cfg_get(cfg, "compile", "agent_dataset", default={})
     experiment_id = _experiment_id_from_cfg(cfg)
-    root = _exp_root(experiment_id) if experiment_id else None
+    root = _exp_root(experiment_id, cfg=cfg) if experiment_id else None
 
     trace_data = _arg_get(args, "trace_data") or _cfg_flat_get(cfg, "agent_dataset_trace_data") or ad.get("trace_data")
     if trace_data is None and root is not None:
@@ -1265,6 +1300,7 @@ def cmd_compile_profile(args, cfg):
             openclaw_lobster_workflow_file=openclaw_lobster_workflow_file,
             openclaw_agent_policies=openclaw_agent_policies,
             judge_policies=raw_judge_policies,
+            experiment_root=str(_exp_root(experiment_id, cfg=cfg)),
         )
     )
     summary_path = Path(output_dir) / "summary_statistics.json"
@@ -1289,7 +1325,7 @@ def cmd_compile_predict(args, cfg):
     experiment_id = _cfg_get(cfg, "compile", "experiment_id")
     if experiment_id is None:
         experiment_id = _cfg_flat_get(cfg, "experiment_id")
-    root = _exp_root(experiment_id) if experiment_id else None
+    root = _exp_root(experiment_id, cfg=cfg) if experiment_id else None
     workflow_type = (
         _arg_get(args, "workflow_type")
         or _cfg_flat_get(cfg, "predict_workflow_type")
@@ -1371,6 +1407,7 @@ def cmd_compile_predict(args, cfg):
         experiment_id,
         explicit_value=latency_file,
         label="latency_file",
+        cfg=cfg,
     )
 
     if output_file is None:
@@ -1459,7 +1496,7 @@ def cmd_test(args, cfg):
     )
     dataset = pick("dataset", _cfg_flat_get(cfg, "dataset", "MATH500"), flat_key="test_dataset")
     split = pick("split", _cfg_flat_get(cfg, "test_split", "test"), flat_key="test_split")
-    root = _exp_root(experiment_id)
+    root = _exp_root(experiment_id, cfg=cfg)
 
     config_file = pick("config_file")
     if config_file is None:
@@ -1535,7 +1572,7 @@ def cmd_runtime_infer(args, cfg):
     started = time.perf_counter()
     runtime_cfg = _cfg_get(cfg, "runtime", default={})
     experiment_id = _experiment_id_from_cfg(cfg)
-    root = _exp_root(experiment_id) if experiment_id else None
+    root = _exp_root(experiment_id, cfg=cfg) if experiment_id else None
     workflow_type = (
         args.workflow_type
         or _cfg_flat_get(cfg, "runtime_workflow_type")
@@ -1695,13 +1732,13 @@ def cmd_experiments(args, cfg):
         raise SystemExit(
             "experiment_id is required in config for flowcompile experiments."
         )
-    default_output_dir = _exp_experiment_output_dir(experiment_id, name)
+    default_output_dir = _exp_experiment_output_dir(experiment_id, name, cfg=cfg)
 
     # Config-driven correlation mode (compile-style):
     # `flowcompile --config <yaml> experiments correlation`
     # still preserves passthrough mode when extra args are provided.
     if not (args.extra or []):
-        root = _exp_root(experiment_id)
+        root = _exp_root(experiment_id, cfg=cfg)
 
         workflow_type = _cfg_flat_get(cfg, "workflow_type")
         if not workflow_type:
@@ -1723,6 +1760,7 @@ def cmd_experiments(args, cfg):
             experiment_id,
             explicit_value=_cfg_flat_get(cfg, "correlation_latency_file"),
             label="latency_file",
+            cfg=cfg,
         )
 
         cmd_args = [
@@ -1767,26 +1805,11 @@ def cmd_experiments(args, cfg):
 
 def cmd_openclaw(args, cfg):
     del cfg
-    reporter = get_reporter().child("openclaw")
     started = time.perf_counter()
-
-    if args.openclaw_command == "stage":
-        manifest_path = stage_openclaw_workspace(
-            args.workflow_file,
-            args.experiment_id,
-            source_root=args.source_root,
-            model_config=args.model_config,
-        )
-        _emit_command_summary(
-            "OpenClaw Stage",
-            f"Manifest: {manifest_path}",
-            f"Elapsed: {_format_elapsed(time.perf_counter() - started)}",
-        )
-        return 0
 
     if args.openclaw_command == "demo-run":
         session_path = demo_run_openclaw(
-            args.manifest,
+            args.workflow_dir,
             args_json=args.args_json,
             env_json=args.env_json,
         )
@@ -1802,7 +1825,7 @@ def cmd_openclaw(args, cfg):
 
     if args.openclaw_command == "demo-resume":
         session_path = demo_resume_openclaw(
-            args.session,
+            args.workflow_dir,
             approve=args.approve,
             env_json=args.env_json,
         )
@@ -1817,7 +1840,7 @@ def cmd_openclaw(args, cfg):
         return 0
 
     if args.openclaw_command == "analyze-demo":
-        analysis_path = analyze_openclaw_demo(args.manifest)
+        analysis_path = analyze_openclaw_demo(args.workflow_dir)
         _emit_command_summary(
             "OpenClaw Analyze Demo",
             f"Analysis bundle: {analysis_path}",
@@ -1826,12 +1849,15 @@ def cmd_openclaw(args, cfg):
         return 0
 
     if args.openclaw_command == "validate-config":
-        loaded_cfg = _load_yaml(args.config_path)
-        summary = validate_openclaw_config_payload(loaded_cfg, config_path=args.config_path)
+        config_path = (
+            Path(args.workflow_dir).expanduser().resolve() / "flowcompile" / "flowcompile_openclaw.yaml"
+        )
+        loaded_cfg = _load_yaml(str(config_path))
+        summary = validate_openclaw_config_payload(loaded_cfg, config_path=str(config_path))
         _emit_command_summary(
             "OpenClaw Validate Config",
             f"Workflow agents: {len(summary.get('workflow_agents', []))}",
-            f"Config: {args.config_path}",
+            f"Config: {config_path}",
             f"Elapsed: {_format_elapsed(time.perf_counter() - started)}",
         )
         return 0
@@ -1978,27 +2004,21 @@ def main(argv: Optional[List[str]] = None):
     openclaw = subparsers.add_parser("openclaw")
     openclaw_sub = openclaw.add_subparsers(dest="openclaw_command", required=True)
 
-    oc_stage = openclaw_sub.add_parser("stage")
-    oc_stage.add_argument("--workflow-file", required=True)
-    oc_stage.add_argument("--experiment-id", required=True)
-    oc_stage.add_argument("--source-root")
-    oc_stage.add_argument("--model-config", default="configs/config.qwen35.local.yaml")
-
     oc_demo_run = openclaw_sub.add_parser("demo-run")
-    oc_demo_run.add_argument("--manifest", required=True)
+    oc_demo_run.add_argument("--workflow-dir", required=True)
     oc_demo_run.add_argument("--args-json")
     oc_demo_run.add_argument("--env-json")
 
     oc_demo_resume = openclaw_sub.add_parser("demo-resume")
-    oc_demo_resume.add_argument("--session", required=True)
+    oc_demo_resume.add_argument("--workflow-dir", required=True)
     oc_demo_resume.add_argument("--approve", default="yes")
     oc_demo_resume.add_argument("--env-json")
 
     oc_analyze = openclaw_sub.add_parser("analyze-demo")
-    oc_analyze.add_argument("--manifest", required=True)
+    oc_analyze.add_argument("--workflow-dir", required=True)
 
     oc_validate = openclaw_sub.add_parser("validate-config")
-    oc_validate.add_argument("--config", dest="config_path", required=True)
+    oc_validate.add_argument("--workflow-dir", required=True)
 
     args = parser.parse_args(argv)
     cfg = _load_yaml(args.flow_config)

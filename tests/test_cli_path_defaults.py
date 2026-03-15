@@ -95,6 +95,55 @@ def test_compile_predict_uses_canonical_defaults(monkeypatch, tmp_path: Path):
     ]
 
 
+def test_compile_predict_uses_experiment_root_when_configured(monkeypatch, tmp_path: Path):
+    bundle_root = tmp_path / "workspace" / "workflows" / "outlook-past-24h" / "flowcompile"
+    cfg_path = bundle_root / "flowcompile_openclaw.yaml"
+
+    _write_json(bundle_root / "01_profile" / "benchmark_20260212_000000" / "detailed_results.json", {})
+    _write_json(bundle_root / "01_profile" / "aggregated_training_data.json", {"training_data": []})
+    _write_json(bundle_root / "01_profile" / "latency_benchmark.json", {})
+
+    captured = {}
+
+    def fake_compile_pareto(**kwargs):
+        captured.update(kwargs)
+        return {}
+
+    monkeypatch.setattr(cli, "compile_pareto", fake_compile_pareto)
+
+    args = SimpleNamespace(
+        workflow_type=None,
+        detailed_results=None,
+        trace_data=None,
+        latency_file=None,
+        output_file=None,
+        plot_file=None,
+        include_all=None,
+        prune_subagents=None,
+        search_axes=None,
+        search_models=None,
+        search_budgets=None,
+        search_structures=None,
+        search_agent_models=None,
+        search_agent_budgets=None,
+    )
+    cfg = {
+        "compile": {
+            "experiment_id": "outlook-past-24h",
+            "workflow_type": "math",
+            "predict": {},
+        },
+        "experiment_root": ".",
+        cli._CONFIG_PATH_META_KEY: str(cfg_path),
+    }
+
+    assert cli.cmd_compile_predict(args, cfg) == 0
+    assert captured["trace_data"] == str(bundle_root / "01_profile" / "aggregated_training_data.json")
+    assert captured["latency_file"] == str(bundle_root / "01_profile" / "latency_benchmark.json")
+    assert captured["output_file"] == str(bundle_root / "02_compile" / "compiled_configs.json")
+    assert captured["plot_file"] == str(bundle_root / "02_compile" / "figures" / "compiled_latency_vs_score.png")
+
+
 def test_test_defaults_config_and_output_dir(monkeypatch, tmp_path: Path):
     monkeypatch.chdir(tmp_path)
     exp = "exp_validate"
@@ -165,6 +214,38 @@ def test_runtime_infer_batch_uses_experiment_defaults(monkeypatch, tmp_path: Pat
     lines = out_file.read_text(encoding="utf-8").strip().splitlines()
     assert len(lines) == 1
     assert json.loads(lines[0])["answer"] == "2"
+
+
+def test_runtime_infer_batch_uses_experiment_root(monkeypatch, tmp_path: Path):
+    bundle_root = tmp_path / "workspace" / "workflows" / "outlook-past-24h" / "flowcompile"
+    cfg_path = bundle_root / "flowcompile_openclaw.yaml"
+    compiled_path = bundle_root / "02_compile" / "compiled_configs.json"
+    _write_json(compiled_path, {"schema_version": "flowcompile.compiled.v2", "configs": [{"config_id": "cfg_0000"}]})
+    queries_path = tmp_path / "queries.jsonl"
+    _write_jsonl(queries_path, [{"id": "q1", "problem": "Solve 1+1"}])
+
+    captured = {}
+
+    def fake_infer_runtime_batch(**kwargs):
+        captured.update(kwargs)
+        return [{"query_id": "q1", "answer": "2"}]
+
+    monkeypatch.setattr(cli, "infer_runtime_batch", fake_infer_runtime_batch)
+
+    args = _runtime_args(
+        queries=str(queries_path),
+        workflow_type=None,
+    )
+    cfg = {
+        "compile": {"experiment_id": "outlook-past-24h", "workflow_type": "math"},
+        "experiment_root": ".",
+        cli._CONFIG_PATH_META_KEY: str(cfg_path),
+    }
+
+    assert cli.cmd_runtime_infer(args, cfg) == 0
+    assert captured["workflow_type"] == "math"
+    out_file = bundle_root / "runtime" / "outputs" / "runtime_results.jsonl"
+    assert out_file.exists()
 
 
 def test_compile_predict_rejects_noncanonical_latency_path(monkeypatch, tmp_path: Path):

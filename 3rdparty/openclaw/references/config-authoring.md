@@ -1,6 +1,6 @@
 # FlowCompile OpenClaw Config Authoring
 
-Use this reference after `flowcompile openclaw analyze-demo`.
+Use this reference after `flowcompile openclaw analyze-demo --workflow-dir <bundle-dir>`.
 
 ## Required Keys
 
@@ -8,6 +8,7 @@ Every authored config must include:
 
 - `schema_version: "flowcompile.flat.v1"`
 - `experiment_id`
+- `experiment_root`
 - `workflow_type: "openclaw_lobster"`
 - `model_config`
 - `openclaw_lobster_workflow_file`
@@ -98,9 +99,10 @@ Rules:
 
 ## Path Writing
 
-- Prefer the staged relative paths suggested in `results/<id>/openclaw/demo_analysis.json`.
+- Prefer the bundle-local relative paths suggested in `<bundle-dir>/flowcompile/demo_analysis.json`.
+- For bundled OpenClaw workflows, set `experiment_root: "."` because the authored config lives inside `<bundle-dir>/flowcompile/`.
 - The config validator accepts paths that are either valid from the current working directory or valid relative to the config file location.
-- Do not point back to the original copied OpenClaw tree if the staged copy exists.
+- Keep all FlowCompile artifacts under `<bundle-dir>/flowcompile/`; do not point back to a separate `results/<id>/...` tree.
 
 ## openclaw_agent_policies
 
@@ -139,6 +141,7 @@ Use `workflow_loops` when repeated LLM calls materially change workflow latency.
 Shape:
 
 ```yaml
+experiment_root: "."
 workflow_loops:
   - name: "email_loop"
     count: 20

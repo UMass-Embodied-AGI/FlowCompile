@@ -1,7 +1,11 @@
 schema_version: "flowcompile.flat.v1"
 
+# This example is meant to live at:
+#   workflows/outlook-past-24h/flowcompile/flowcompile_openclaw.yaml
+
 # Core
 experiment_id: "openclaw_outlook_past24h"
+experiment_root: "."
 workflow_type: "openclaw_lobster"
 
 # Model config can be inline or a path. This example uses the inline form.
@@ -48,11 +52,11 @@ model_config:
       default_reasoning_effort: "medium"
 
 # OpenClaw Lobster workflow + prepared profiling data (skip prepare-data stage).
-openclaw_lobster_workflow_file: "openclaw/workflows/outlook-past-24h.lobster.yaml"
-profile_training_data: "openclaw/flowcompile_training.json"
+openclaw_lobster_workflow_file: "../workflow.lobster.yaml"
+profile_training_data: "flowcompile_training.json"
 
 # predict must read trace data explicitly when prepare-data is skipped.
-predict_trace_data: "openclaw/flowcompile_training.json"
+predict_trace_data: "flowcompile_training.json"
 
 openclaw_agent_policies:
   summarize_each:

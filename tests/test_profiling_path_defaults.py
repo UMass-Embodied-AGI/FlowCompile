@@ -33,6 +33,18 @@ def test_get_experiment_config_falls_back_to_legacy_data_aggregated(monkeypatch,
     assert cfg["output_dir"] == f"results/{exp}/01_profile"
 
 
+def test_get_experiment_config_uses_explicit_experiment_root(tmp_path):
+    root = tmp_path / "workspace" / "workflows" / "outlook-past-24h" / "flowcompile"
+    profile_agg = root / "01_profile" / "aggregated_training_data.json"
+    profile_agg.parent.mkdir(parents=True, exist_ok=True)
+    profile_agg.write_text("{}", encoding="utf-8")
+
+    cfg = get_experiment_config("outlook-past-24h", experiment_root=str(root))
+
+    assert cfg["training_data_path"] == str(profile_agg)
+    assert cfg["output_dir"] == str(root / "01_profile")
+
+
 def test_run_profiling_closes_runner_on_success(monkeypatch):
     state = {"closed": False, "saved": False, "ran": False}
 
