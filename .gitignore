@@ -260,4 +260,4 @@ experiment/**/
 *.pkl
 
 AGENTS.md
-openclaw/
+openclaw_outlook_example/
