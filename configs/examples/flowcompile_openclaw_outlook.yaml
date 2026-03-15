@@ -187,7 +187,7 @@ search_models:
   - "qwen35-4b"
   - "qwen35-9b-awq"
   - "qwen35-27b-awq"
-search_budgets: [10, 200, 400, 800, 1000, 1500, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 12000, 16000]
+search_budgets: [10, 500, 1000, 2000, 4000, 8000]
 workflow_loops:
   - name: "email_loop"
     count: 20
@@ -199,10 +199,18 @@ workflow_loops:
 
 # Profile controls
 profile_models:
+  - "qwen35-0.8b"
+  - "qwen35-2b"
+  - "qwen35-4b"
   - "qwen35-9b-awq"
-profile_min_samples_per_agent: 100
-profile_max_concurrent: 128
+  - "qwen35-27b-awq"
+profile_min_samples_per_agent: 20
+profile_max_concurrent: 32
 
 # Latency benchmark controls
 latency_models:
+  - "Qwen/Qwen3.5-0.8B"
+  - "Qwen/Qwen3.5-2B"
+  - "Qwen/Qwen3.5-4B"
   - "QuantTrio/Qwen3.5-9B-AWQ"
+  - "QuantTrio/Qwen3.5-27B-AWQ"
