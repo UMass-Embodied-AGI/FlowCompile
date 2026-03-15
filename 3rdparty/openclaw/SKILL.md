@@ -41,5 +41,7 @@ Use this skill when OpenClaw is running on its own machine and needs to optimize
 ## Authoring Notes
 
 - Write judge prompts only after reviewing the captured demo samples.
-- Infer `workflow_loops` from the demo analysis, then confirm loop counts with the human before finalizing them.
+- If `analyze-demo` reports any workflow LLM step with zero captured samples, reject that demo and capture another one before authoring YAML.
+- Infer `workflow_loops` from the workflow structure exposed in the demo analysis, then confirm loop counts with the human before finalizing them.
+- Treat observed demo counts in `candidate_workflow_loops` as hints only, not as proof that a loop does or does not exist.
 - Omit `predict_subagent_score_thresholds` unless the human explicitly wants pruning.

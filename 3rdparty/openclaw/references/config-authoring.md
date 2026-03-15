@@ -155,6 +155,8 @@ Rules:
 - `reduce_node`, if present, is counted once.
 - `reduce_node` must be a `map_reduce` or `reduce` node.
 - A node cannot appear in more than one loop.
+- `candidate_workflow_loops` in `demo_analysis.json` are structural authoring candidates. Their observed counts are hints from the captured demo, not the rule for whether the loop exists.
+- If `analyze-demo` rejects the bundle because any workflow LLM step has zero captured samples, collect another demo before authoring the YAML.
 - Start from the candidate loops in `demo_analysis.json`, then confirm or edit loop counts with the human.
 
 ## predict_subagent_score_thresholds

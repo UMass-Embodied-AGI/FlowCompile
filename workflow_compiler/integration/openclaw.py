@@ -637,6 +637,33 @@ def _agent_upstreams(spec: Dict[str, Any], node_id: str) -> List[str]:
     return ordered
 
 
+def _agent_operator(node: Dict[str, Any]) -> str:
+    return str((node.get("metadata") or {}).get("operator") or "").lower()
+
+
+def _workflow_agent_ids(spec: Dict[str, Any]) -> List[str]:
+    return [
+        str(node.get("id"))
+        for node in (spec.get("nodes") or [])
+        if node.get("type") == "agent" and node.get("id")
+    ]
+
+
+def _reject_incomplete_demo(spec: Dict[str, Any], counts_by_agent: Dict[str, int]) -> None:
+    missing = [
+        agent_name
+        for agent_name in _workflow_agent_ids(spec)
+        if int(counts_by_agent.get(agent_name, 0) or 0) <= 0
+    ]
+    if not missing:
+        return
+    missing_text = ", ".join(sorted(missing))
+    raise ValueError(
+        "OpenClaw demo is incomplete; missing captured samples for workflow LLM steps: "
+        f"{missing_text}. Provide another demo that exercises every LLM step before authoring YAML."
+    )
+
+
 def infer_candidate_workflow_loops(spec: Dict[str, Any], counts_by_agent: Dict[str, int]) -> List[Dict[str, Any]]:
     nodes = [node for node in (spec.get("nodes") or []) if node.get("type") == "agent"]
     order = [str(node.get("id")) for node in nodes if node.get("id")]
@@ -646,19 +673,20 @@ def infer_candidate_workflow_loops(spec: Dict[str, Any], counts_by_agent: Dict[s
 
     for node_id in order:
         node = node_by_id[node_id]
-        operator = str((node.get("metadata") or {}).get("operator") or "").lower()
+        operator = _agent_operator(node)
         if operator not in {"map_reduce", "map-reduce", "reduce"}:
             continue
         upstreams = _agent_upstreams(spec, node_id)
         if not upstreams:
             continue
-        loop_count = max(int(counts_by_agent.get(upstream, 0) or 0) for upstream in upstreams)
-        if loop_count <= 1:
-            continue
+        loop_count = max(1, max(int(counts_by_agent.get(upstream, 0) or 0) for upstream in upstreams))
         loops.append(
             {
                 "name": f"{node_id}_loop",
                 "count": loop_count,
+                "count_source": "observed_demo_hint",
+                "inference_source": "structure",
+                "requires_human_confirmation": True,
                 "map_nodes": upstreams,
                 "reduce_node": node_id,
                 "observed_counts": {agent: int(counts_by_agent.get(agent, 0) or 0) for agent in [*upstreams, node_id]},
@@ -670,8 +698,20 @@ def infer_candidate_workflow_loops(spec: Dict[str, Any], counts_by_agent: Dict[s
     idx = 0
     while idx < len(order):
         node_id = order[idx]
-        loop_count = int(counts_by_agent.get(node_id, 0) or 0)
-        if node_id in assigned or loop_count <= 1:
+        node = node_by_id[node_id]
+        operator = _agent_operator(node)
+        upstreams = set(_agent_upstreams(spec, node_id))
+        if node_id in assigned or operator != "map":
+            idx += 1
+            continue
+        if not upstreams:
+            idx += 1
+            continue
+        if not any(
+            upstream in assigned
+            or _agent_operator(node_by_id.get(upstream, {})) in {"map_reduce", "map-reduce", "reduce"}
+            for upstream in upstreams
+        ):
             idx += 1
             continue
 
@@ -679,17 +719,30 @@ def infer_candidate_workflow_loops(spec: Dict[str, Any], counts_by_agent: Dict[s
         next_idx = idx + 1
         while next_idx < len(order):
             candidate = order[next_idx]
-            candidate_count = int(counts_by_agent.get(candidate, 0) or 0)
-            upstreams = set(_agent_upstreams(spec, candidate))
-            if candidate in assigned or candidate_count != loop_count or not (upstreams & set(chain)):
+            candidate_node = node_by_id[candidate]
+            candidate_upstreams = set(_agent_upstreams(spec, candidate))
+            if (
+                candidate in assigned
+                or _agent_operator(candidate_node) != "map"
+                or not candidate_upstreams
+                or not (candidate_upstreams & set(chain))
+            ):
                 break
             chain.append(candidate)
             next_idx += 1
 
+        if len(chain) <= 1:
+            idx += 1
+            continue
+
+        loop_count = max(1, max(int(counts_by_agent.get(agent, 0) or 0) for agent in chain))
         loops.append(
             {
                 "name": f"{chain[0]}_loop",
                 "count": loop_count,
+                "count_source": "observed_demo_hint",
+                "inference_source": "structure",
+                "requires_human_confirmation": True,
                 "map_nodes": chain,
                 "observed_counts": {agent: int(counts_by_agent.get(agent, 0) or 0) for agent in chain},
             }
@@ -716,8 +769,9 @@ def analyze_openclaw_demo(workflow_dir: str) -> Path:
             continue
         grouped.setdefault(agent_name, []).append(sample)
 
-    spec = parse_lobster_workflow(manifest["workflow_file"])
     counts_by_agent = {agent_name: len(samples) for agent_name, samples in grouped.items()}
+    spec = parse_lobster_workflow(manifest["workflow_file"])
+    _reject_incomplete_demo(spec, counts_by_agent)
     agents: Dict[str, Dict[str, Any]] = {}
     for agent_name, samples in sorted(grouped.items()):
         required_fields, observed_fields, field_types = _extract_required_fields(samples)

@@ -143,6 +143,68 @@ def _training_payload() -> dict:
     }
 
 
+def _training_payload_single_sample_per_agent() -> dict:
+    return {
+        "training_data": [
+            {
+                "agent_name": "summarize_each",
+                "raw_llm_prompt": "summarize prompt",
+                "processed_output": '{"summary":"s1"}',
+                "raw_llm_output": '{"summary":"s1"}',
+            },
+            {
+                "agent_name": "classify",
+                "raw_llm_prompt": "classify prompt",
+                "processed_output": '{"category":"reply"}',
+                "raw_llm_output": '{"category":"reply"}',
+            },
+            {
+                "agent_name": "overview",
+                "raw_llm_prompt": "overview prompt",
+                "processed_output": '{"overview_paragraph":"overview"}',
+                "raw_llm_output": '{"overview_paragraph":"overview"}',
+            },
+            {
+                "agent_name": "ask_questions",
+                "raw_llm_prompt": "question prompt",
+                "processed_output": '{"question":"q1"}',
+                "raw_llm_output": '{"question":"q1"}',
+            },
+            {
+                "agent_name": "draft_replies",
+                "raw_llm_prompt": "draft prompt",
+                "processed_output": '{"draft_body":"body1"}',
+                "raw_llm_output": '{"draft_body":"body1"}',
+            },
+        ]
+    }
+
+
+def _training_payload_missing_agents() -> dict:
+    return {
+        "training_data": [
+            {
+                "agent_name": "summarize_each",
+                "raw_llm_prompt": "summarize prompt",
+                "processed_output": '{"summary":"s1"}',
+                "raw_llm_output": '{"summary":"s1"}',
+            },
+            {
+                "agent_name": "classify",
+                "raw_llm_prompt": "classify prompt",
+                "processed_output": '{"category":"reply"}',
+                "raw_llm_output": '{"category":"reply"}',
+            },
+            {
+                "agent_name": "overview",
+                "raw_llm_prompt": "overview prompt",
+                "processed_output": '{"overview_paragraph":"overview"}',
+                "raw_llm_output": '{"overview_paragraph":"overview"}',
+            },
+        ]
+    }
+
+
 def test_demo_run_openclaw_creates_bundle_local_artifacts(monkeypatch, tmp_path: Path):
     bundle = _write_workflow_bundle(tmp_path)
 
@@ -231,13 +293,62 @@ def test_analyze_openclaw_demo_emits_bundle_local_relative_paths(tmp_path: Path)
 
     assert analysis["training_data_summary"]["counts_by_agent"]["summarize_each"] == 2
     loops = analysis["candidate_workflow_loops"]
-    assert any(loop["reduce_node"] == "overview" for loop in loops if "reduce_node" in loop)
-    assert any(loop["map_nodes"] == ["ask_questions", "draft_replies"] for loop in loops)
+    assert any(
+        loop["reduce_node"] == "overview"
+        and loop["inference_source"] == "structure"
+        and loop["requires_human_confirmation"] is True
+        for loop in loops
+        if "reduce_node" in loop
+    )
+    assert any(
+        loop["map_nodes"] == ["ask_questions", "draft_replies"]
+        and loop["count"] == 2
+        and loop["count_source"] == "observed_demo_hint"
+        for loop in loops
+    )
     assert analysis["agents"]["overview"]["required_fields_intersection"] == ["overview_paragraph"]
     assert analysis["config_authoring"]["relative_paths"]["openclaw_lobster_workflow_file"] == "../workflow.lobster.yaml"
     assert analysis["config_authoring"]["relative_paths"]["profile_training_data"] == "flowcompile_training.json"
     assert analysis["config_authoring"]["default_values"]["experiment_root"] == "."
     assert "model_config" not in analysis["config_authoring"]["relative_paths"]
+    assert analysis["manifest_path"] == str(manifest_path.resolve())
+
+
+def test_analyze_openclaw_demo_rejects_missing_llm_steps(tmp_path: Path):
+    bundle = _write_workflow_bundle(tmp_path)
+    manifest_path, manifest = openclaw._prepare_manifest(str(bundle))
+    _write_json(Path(manifest["training_data_path"]), _training_payload_missing_agents())
+
+    with pytest.raises(ValueError, match="missing captured samples.*ask_questions, draft_replies"):
+        openclaw.analyze_openclaw_demo(str(bundle))
+
+    assert manifest_path.exists()
+    assert not Path(manifest["analysis_path"]).exists()
+
+
+def test_analyze_openclaw_demo_emits_structural_loops_even_for_single_item_counts(tmp_path: Path):
+    bundle = _write_workflow_bundle(tmp_path)
+    manifest_path, manifest = openclaw._prepare_manifest(str(bundle))
+    _write_json(Path(manifest["training_data_path"]), _training_payload_single_sample_per_agent())
+
+    analysis_path = openclaw.analyze_openclaw_demo(str(bundle))
+    analysis = json.loads(Path(analysis_path).read_text(encoding="utf-8"))
+
+    loops = analysis["candidate_workflow_loops"]
+    assert any(
+        loop["map_nodes"] == ["summarize_each", "classify"]
+        and loop.get("reduce_node") == "overview"
+        and loop["count"] == 1
+        and loop["inference_source"] == "structure"
+        for loop in loops
+    )
+    assert any(
+        loop["map_nodes"] == ["ask_questions", "draft_replies"]
+        and "reduce_node" not in loop
+        and loop["count"] == 1
+        and loop["inference_source"] == "structure"
+        for loop in loops
+    )
     assert analysis["manifest_path"] == str(manifest_path.resolve())
 
 
