@@ -7,6 +7,7 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from workflow_compiler.dsl.torchlike import WorkflowModule, AgentNode, ToolNode
+from workflow_compiler.workflows.template.judges import get_profiling_judges
 
 
 class TemplateWorkflowDSL(WorkflowModule):
@@ -26,6 +27,9 @@ class TemplateWorkflowDSL(WorkflowModule):
             "full_solution": solution,
             "final_solution": solution,
         }
+
+    def get_profiling_judges(self):
+        return get_profiling_judges()
 
 
 __all__ = ["TemplateWorkflowDSL"]

@@ -85,3 +85,28 @@ def test_run_profiling_closes_runner_on_failure(monkeypatch):
         asyncio.run(profiling.run_profiling(experiment_id="exp", max_concurrent=1))
 
     assert state == {"closed": True, "ran": True}
+
+
+def test_initialize_from_experiment_id_warns_when_builtin_judge_policies_are_ignored(monkeypatch, capsys):
+    monkeypatch.setattr(
+        profiling,
+        "get_experiment_config",
+        lambda *args, **kwargs: {
+            "training_data_path": "results/exp/01_profile/aggregated_training_data.json",
+            "output_dir": "results/exp/01_profile",
+            "workflow_type": "math",
+            "search_budgets": [10, 20],
+            "agent_names": ["programmer"],
+            "workflow_module": object(),
+            "workflow_judges": {"programmer": object()},
+            "openclaw_lobster_workflow_file": None,
+            "openclaw_agent_policies": {},
+        },
+    )
+
+    profiling.BenchmarkConfig.initialize_from_experiment_id(
+        "exp",
+        judge_policies={"programmer": {"mode": "semantic_llm", "prompt": "unused"}},
+    )
+
+    assert "judge_policies are ignored for built-in workflows" in capsys.readouterr().out

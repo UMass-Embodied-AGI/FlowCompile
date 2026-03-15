@@ -128,3 +128,51 @@ def test_measure_batch_openai_zero_tokens_keeps_zero_decode(monkeypatch):
     assert stats.total_generated_tokens == 0
     assert stats.decode_time_s == 0.0
     assert stats.decode_tok_per_s is None
+
+
+def test_load_model_routes_uses_local_endpoint_for_latency_role(tmp_path):
+    config_path = tmp_path / "models.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "endpoints:",
+                '  local_base_url: "http://127.0.0.1:4000"',
+                '  profile_base_url: "http://profile-host:4000"',
+                "models:",
+                "  qwen35-9b-awq:",
+                '    api_type: "openai"',
+                '    api_key: "dummy"',
+                '    hf_model_name: "QuantTrio/Qwen3.5-9B-AWQ"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    routes = latency._load_model_routes(str(config_path), endpoint_role="latency")
+
+    assert len(routes) == 1
+    assert routes[0]["base_url"] == "http://127.0.0.1:4000"
+    assert routes[0]["request_model"] == "qwen35-9b-awq"
+    assert "QuantTrio/Qwen3.5-9B-AWQ" in routes[0]["aliases"]
+
+
+def test_load_model_routes_keeps_legacy_base_url_without_endpoints(tmp_path):
+    config_path = tmp_path / "models.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "models:",
+                "  qwen35-9b-awq:",
+                '    api_type: "openai"',
+                '    base_url: "http://legacy-host:4000"',
+                '    api_key: "dummy"',
+                '    hf_model_name: "QuantTrio/Qwen3.5-9B-AWQ"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    routes = latency._load_model_routes(str(config_path), endpoint_role="latency")
+
+    assert len(routes) == 1
+    assert routes[0]["base_url"] == "http://legacy-host:4000"

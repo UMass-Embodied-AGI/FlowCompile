@@ -4,46 +4,205 @@ schema_version: "flowcompile.flat.v1"
 experiment_id: "openclaw_outlook_past24h"
 workflow_type: "openclaw_lobster"
 
-# Required by flat schema. Not used for the OpenClaw profile/predict path.
-dataset: "MATH500"
-validate_file: "data/math500_validate.jsonl"
-test_file: "data/math500_test.jsonl"
-
-# Model config used by profile/get-latency.
-model_config: "configs/config.qwen35.local.yaml"
+# Model config can be inline or a path. This example uses the inline form.
+model_config:
+  endpoints:
+    local_base_url: "http://127.0.0.1:4000"
+    profile_base_url: "http://127.0.0.1:4000"
+  models:
+    qwen35-0.8b:
+      api_type: "openai"
+      api_key: "sk-proxy-demo-key"
+      hf_model_name: "Qwen/Qwen3.5-0.8B"
+      enable_thinking_budget: true
+      thinking_budget_reasoning_parser: "qwen3"
+    qwen35-2b:
+      api_type: "openai"
+      api_key: "sk-proxy-demo-key"
+      hf_model_name: "Qwen/Qwen3.5-2B"
+      enable_thinking_budget: true
+      thinking_budget_reasoning_parser: "qwen3"
+    qwen35-4b:
+      api_type: "openai"
+      api_key: "sk-proxy-demo-key"
+      hf_model_name: "Qwen/Qwen3.5-4B"
+      enable_thinking_budget: true
+      thinking_budget_reasoning_parser: "qwen3"
+    qwen35-9b-awq:
+      api_type: "openai"
+      api_key: "sk-proxy-demo-key"
+      hf_model_name: "QuantTrio/Qwen3.5-9B-AWQ"
+      enable_thinking_budget: true
+      thinking_budget_reasoning_parser: "qwen3"
+    qwen35-27b-awq:
+      api_type: "openai"
+      api_key: "sk-proxy-demo-key"
+      hf_model_name: "QuantTrio/Qwen3.5-27B-AWQ"
+      enable_thinking_budget: true
+      thinking_budget_reasoning_parser: "qwen3"
+    gpt-oss-120b:
+      api_type: "openai"
+      api_key: "sk-proxy-demo-key"
+      hf_model_name: "openai/gpt-oss-120b"
+      enable_thinking_budget: false
+      default_reasoning_effort: "medium"
 
 # OpenClaw Lobster workflow + prepared profiling data (skip prepare-data stage).
-openclaw_lobster_workflow_file: "/home/junyan/.openclaw/workspace/workflows/outlook-past-24h.lobster.yaml"
-profile_training_data: "/home/junyan/.openclaw/workspace/.local/outlook/flowcompile_training.json"
+openclaw_lobster_workflow_file: "openclaw/workflows/outlook-past-24h.lobster.yaml"
+profile_training_data: "openclaw/flowcompile_training.json"
 
 # predict must read trace data explicitly when prepare-data is skipped.
-predict_trace_data: "/home/junyan/.openclaw/workspace/.local/outlook/flowcompile_training.json"
+predict_trace_data: "openclaw/flowcompile_training.json"
+
+openclaw_agent_policies:
+  summarize_each:
+    required_fields: ["summary"]
+    judge:
+      mode: "semantic_llm"
+      prompt: |
+        You are evaluating an email summary.
+
+        Required field(s): {required_fields}
+
+        Original instruction for this sample:
+        {input_prompt}
+
+        Ground Truth Summary:
+        {ground_truth_field}
+
+        Predicted Summary:
+        {predicted_field}
+
+        Task:
+        1. Determine whether the predicted summary is semantically consistent with the ground truth.
+        2. Ensure it does not contradict key facts in the ground truth.
+        3. Ensure it is faithful to the original instruction constraints.
+
+        Respond with ONLY ONE WORD:
+        - "CORRECT" if all criteria are satisfied
+        - "INCORRECT" otherwise
+
+        Judgment:
+  classify:
+    required_fields: ["category"]
+    judge:
+      mode: "strict_exact"
+  overview:
+    required_fields: ["overview_paragraph"]
+    judge:
+      mode: "semantic_llm"
+      prompt: |
+        You are evaluating an inbox overview paragraph.
+
+        Required field(s): {required_fields}
+
+        Original instruction for this sample:
+        {input_prompt}
+
+        Ground Truth Overview:
+        {ground_truth_field}
+
+        Predicted Overview:
+        {predicted_field}
+
+        Task:
+        1. Determine whether the predicted overview is semantically aligned with the ground truth.
+        2. Ensure it preserves the important priorities, reply obligations, and time-sensitive facts.
+        3. Ensure it is reasonable and follows the instruction constraints.
+
+        Respond with ONLY ONE WORD:
+        - "CORRECT" if all criteria are satisfied
+        - "INCORRECT" otherwise
+
+        Judgment:
+  ask_questions:
+    required_fields: ["question"]
+    judge:
+      mode: "semantic_llm"
+      prompt: |
+        You are evaluating a clarification question for an email reply workflow.
+
+        Required field(s): {required_fields}
+
+        Original instruction for this sample:
+        {input_prompt}
+
+        Ground Truth Question:
+        {ground_truth_field}
+
+        Predicted Question:
+        {predicted_field}
+
+        Task:
+        1. Determine whether the predicted question matches the ground-truth intent.
+        2. Ensure it is useful for unblocking a safe and effective reply.
+        3. Ensure it follows the instruction constraints.
+
+        Respond with ONLY ONE WORD:
+        - "CORRECT" if all criteria are satisfied
+        - "INCORRECT" otherwise
+
+        Judgment:
+  draft_replies:
+    required_fields: ["draft_body"]
+    judge:
+      mode: "semantic_llm"
+      prompt: |
+        You are evaluating a drafted email reply.
+
+        Required field(s): {required_fields}
+
+        Original instruction for this sample:
+        {input_prompt}
+
+        Ground Truth Draft:
+        {ground_truth_field}
+
+        Predicted Draft:
+        {predicted_field}
+
+        Task:
+        1. Check semantic alignment with the ground truth draft, including key commitments and factual content.
+        2. Check instruction adherence from the original prompt, including tone, constraints, and requested actions.
+        3. Ensure the draft is reasonable, actionable, and not contradictory or fabricated.
+
+        Respond with ONLY ONE WORD:
+        - "CORRECT" if all criteria are satisfied
+        - "INCORRECT" otherwise
+
+        Judgment:
+
+predict_subagent_score_thresholds:
+  summarize_each: 0.4
+  classify: 0.4
+  overview: 0.2
+  ask_questions: 0.2
+  draft_replies: 0.3
 
 # Search space (required)
 search_axes: ["model", "budget"]
 search_models:
-  - "qwen35-0.8b-local"
-  - "qwen35-2b-local"
-  - "qwen35-4b-local"
-  - "qwen35-9b-local"
-  - "qwen35-27b-local"
+  - "qwen35-0.8b"
+  - "qwen35-2b"
+  - "qwen35-4b"
+  - "qwen35-9b-awq"
+  - "qwen35-27b-awq"
 search_budgets: [10, 200, 400, 800, 1000, 1500, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 12000, 16000]
+workflow_loops:
+  - name: "email_loop"
+    count: 20
+    map_nodes: ["summarize_each", "classify"]
+    reduce_node: "overview"
+  - name: "need_reply_loop"
+    count: 2
+    map_nodes: ["ask_questions", "draft_replies"]
 
 # Profile controls
 profile_models:
-  - "qwen35-0.8b-local"
-  - "qwen35-2b-local"
-  - "qwen35-4b-local"
-  - "qwen35-9b-local"
-  - "qwen35-27b-local"
-profile_min_samples_per_agent: 1
-profile_max_concurrent: 32
+  - "qwen35-9b-awq"
+profile_min_samples_per_agent: 100
+profile_max_concurrent: 128
 
 # Latency benchmark controls
 latency_models:
-  - "Qwen/Qwen3.5-0.8B"
-  - "Qwen/Qwen3.5-2B"
-  - "Qwen/Qwen3.5-4B"
-  - "Qwen/Qwen3.5-9B"
-  - "Qwen/Qwen3.5-27B"
-latency_backend: "openai"
+  - "QuantTrio/Qwen3.5-9B-AWQ"

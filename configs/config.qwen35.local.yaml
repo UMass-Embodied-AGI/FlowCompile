@@ -1,7 +1,10 @@
+endpoints:
+  local_base_url: "http://127.0.0.1:4000"
+  profile_base_url: "http://127.0.0.1:4000"
+
 models:
   qwen35-0.8b:
     api_type: "openai"
-    base_url: "http://127.0.0.1:4000"
     api_key: "sk-proxy-demo-key"
     hf_model_name: "Qwen/Qwen3.5-0.8B"
     enable_thinking_budget: true
@@ -9,7 +12,6 @@ models:
 
   qwen35-2b:
     api_type: "openai"
-    base_url: "http://127.0.0.1:4000"
     api_key: "sk-proxy-demo-key"
     hf_model_name: "Qwen/Qwen3.5-2B"
     enable_thinking_budget: true
@@ -17,7 +19,6 @@ models:
 
   qwen35-4b:
     api_type: "openai"
-    base_url: "http://127.0.0.1:4000"
     api_key: "sk-proxy-demo-key"
     hf_model_name: "Qwen/Qwen3.5-4B"
     enable_thinking_budget: true
@@ -25,7 +26,6 @@ models:
 
   qwen35-9b:
     api_type: "openai"
-    base_url: "http://127.0.0.1:4000"
     api_key: "sk-proxy-demo-key"
     hf_model_name: "Qwen/Qwen3.5-9B"
     enable_thinking_budget: true
@@ -33,7 +33,6 @@ models:
 
   qwen35-9b-awq:
     api_type: "openai"
-    base_url: "http://127.0.0.1:4000"
     api_key: "sk-proxy-demo-key"
     hf_model_name: "QuantTrio/Qwen3.5-9B-AWQ"
     enable_thinking_budget: true
@@ -41,7 +40,6 @@ models:
 
   qwen35-27b:
     api_type: "openai"
-    base_url: "http://127.0.0.1:4000"
     api_key: "sk-proxy-demo-key"
     hf_model_name: "Qwen/Qwen3.5-27B"
     enable_thinking_budget: true
@@ -49,7 +47,6 @@ models:
 
   qwen35-27b-awq:
     api_type: "openai"
-    base_url: "http://127.0.0.1:4000"
     api_key: "sk-proxy-demo-key"
     hf_model_name: "QuantTrio/Qwen3.5-27B-AWQ"
     enable_thinking_budget: true
@@ -58,7 +55,6 @@ models:
 
   gpt-oss-120b:
     api_type: "openai"
-    base_url: "http://127.0.0.1:4000"
     api_key: "sk-proxy-demo-key"
     hf_model_name: "openai/gpt-oss-120b"
     enable_thinking_budget: false

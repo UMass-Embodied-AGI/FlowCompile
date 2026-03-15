@@ -18,12 +18,18 @@ Typical contents:
 
 - `workflow.py` – the Python DSL workflow definition (required)
 - `agents.py` – optional, only if you need custom SubAgent implementations
+- `judges.py` – optional, used when profiling needs workflow-owned agent correctness logic
 - `__init__.py` – export your DSL class for convenience
 
 If you add `agents.py`, implement custom agents by subclassing `SubAgent` and
 only defining `run(...) -> AgentResult`. Do not build metadata manually:
 `SubAgent.execute` auto-records `agent`, `call_number`, token counts, raw LLM
 prompt/output, processed output, timestamp, and status.
+
+If you add `judges.py`, expose `get_profiling_judges()` and register one async
+judge per inferred agent name that needs custom profiling evaluation. This is
+the extension point for agent-specific correctness logic; do not add new
+hardcoded branches in `compiler/profiling.py`.
 
 ## 2) Implement the DSL workflow (`workflow.py`)
 
@@ -56,6 +62,7 @@ Guidelines:
 
 - Use normal Python grammar (loops, breaks, etc.).
 - Do **not** add any evaluation logic or correctness checks inside the workflow.
+- Put profiling correctness logic in `judges.py`, keyed by canonical `AgentNode.name`.
 - Auto-backward is enabled by default. You only need to implement `backward(payload)` if
   your workflow uses unsupported conditional logic or custom composition rules.
 - `AgentNode.name` is the canonical key end-to-end (structure IDs, metrics payload, runtime config keys).
@@ -100,11 +107,12 @@ final outputs are written to `trace.jsonl`.
 
 ## 5) (Optional) Export in the package `__init__.py`
 
-Add your DSL class to the workflow package’s `__init__.py` for convenience:
+Add your DSL class and judge registry helper to the workflow package’s `__init__.py` for convenience:
 
 ```python
+from .judges import get_profiling_judges
 from .workflow import MyWorkflowDSL
-__all__ = ["MyWorkflowDSL", ...]
+__all__ = ["MyWorkflowDSL", "get_profiling_judges", ...]
 ```
 
 ## 6) Quick sanity check

@@ -5,6 +5,7 @@ from typing import Any, Dict
 
 from workflow_compiler.dsl.torchlike import WorkflowModule, AgentNode, ToolNode
 from workflow_compiler.core.workflow import prompts as prompt_custom
+from workflow_compiler.workflows.code.judges import get_profiling_judges
 
 
 class LiveCodeBenchWorkflowDSL(WorkflowModule):
@@ -64,6 +65,9 @@ class LiveCodeBenchWorkflowDSL(WorkflowModule):
             "full_solution": final_solution,
             "final_solution": final_solution,
         }
+
+    def get_profiling_judges(self):
+        return get_profiling_judges()
 
 
 __all__ = [

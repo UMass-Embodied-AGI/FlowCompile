@@ -31,6 +31,21 @@ from workflow_compiler.runtime.selector import (
 from workflow_compiler.core.analysis.prediction import parse_search_axes, parse_agent_constraints
 from workflow_compiler.benchmarks import get_benchmark_info
 from workflow_compiler.core.data_paths import resolve_existing_path
+from workflow_compiler.core.llm.config import (
+    MODEL_CONFIG_JSON_ENV,
+    load_model_config_payload,
+    serialize_model_config_payload,
+    set_default_model_config_payload,
+    validate_model_config_payload,
+)
+from workflow_compiler.integration.openclaw import (
+    analyze_openclaw_demo,
+    demo_resume_openclaw,
+    demo_run_openclaw,
+    normalize_openclaw_agent_policies,
+    stage_openclaw_workspace,
+    validate_openclaw_config_payload,
+)
 from workflow_compiler.core.terminal import (
     CliOutputConfig,
     get_reporter,
@@ -71,6 +86,13 @@ _REMOVED_TEST_KEYS = {
     "test_single_generate_baseline",
     "test_baseline_model",
 }
+_RELATIVE_EXISTING_PATH_KEYS = {
+    "validate_file",
+    "test_file",
+    "openclaw_lobster_workflow_file",
+    "profile_training_data",
+    "predict_trace_data",
+}
 
 
 def _is_flat_config(cfg: Dict[str, Any]) -> bool:
@@ -83,15 +105,23 @@ def _cfg_flat_get(cfg: Dict[str, Any], key: str, default: Any = None) -> Any:
     return cfg.get(key, default)
 
 
-def _load_model_config(model_config_path: str) -> Dict[str, Any]:
-    with open(model_config_path, "r", encoding="utf-8") as f:
-        payload = yaml.safe_load(f) or {}
-    if not isinstance(payload, dict):
-        raise SystemExit(f"Invalid model config format: {model_config_path}")
-    models = payload.get("models")
-    if not isinstance(models, dict):
-        raise SystemExit(f"Invalid model config: missing top-level 'models' map in {model_config_path}")
-    return payload
+def _load_model_config(model_config: Any, *, base_dir: Optional[Path] = None) -> Dict[str, Any]:
+    try:
+        return load_model_config_payload(model_config, base_dir=base_dir)
+    except (FileNotFoundError, ValueError) as exc:
+        raise SystemExit(str(exc)) from exc
+
+
+def _resolve_flat_model_config(cfg: Dict[str, Any], config_path: str) -> Dict[str, Any]:
+    resolved = dict(cfg)
+    try:
+        resolved["model_config"] = load_model_config_payload(
+            cfg.get("model_config"),
+            base_dir=Path(config_path).resolve().parent,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        raise SystemExit(str(exc)) from exc
+    return resolved
 
 
 def _derive_search_models_from_latency_models(cfg: Dict[str, Any]) -> List[str]:
@@ -99,11 +129,11 @@ def _derive_search_models_from_latency_models(cfg: Dict[str, Any]) -> List[str]:
     if not latency_models:
         raise SystemExit("latency_models must be set to derive search models")
 
-    model_config_path = cfg.get("model_config")
-    if not model_config_path:
+    model_config = cfg.get("model_config")
+    if not model_config:
         raise SystemExit("model_config is required to derive search models from latency_models")
 
-    payload = _load_model_config(model_config_path)
+    payload = _load_model_config(model_config)
     model_entries = payload.get("models", {})
     hf_to_aliases: Dict[str, set] = {}
     for cfg_key, model_cfg in model_entries.items():
@@ -123,11 +153,11 @@ def _derive_search_models_from_latency_models(cfg: Dict[str, Any]) -> List[str]:
         if not aliases:
             raise SystemExit(
                 f"Unable to derive search model alias for HF model '{hf_name}'. "
-                f"Add a matching entry with hf_model_name in {model_config_path}."
+                "Add a matching entry with hf_model_name in model_config."
             )
         if len(aliases) != 1:
             raise SystemExit(
-                f"Ambiguous alias mapping for HF model '{hf_name}' in {model_config_path}: {aliases}. "
+                f"Ambiguous alias mapping for HF model '{hf_name}' in model_config: {aliases}. "
                 "Ensure each HF model maps to exactly one search alias."
             )
         derived.append(aliases[0])
@@ -152,15 +182,17 @@ def _validate_flat_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
             "Use top-level flat keys only."
         )
 
-    missing = sorted([k for k in _REQUIRED_FLAT_KEYS if cfg.get(k) in (None, "", [])])
-    if missing:
-        raise SystemExit(f"Missing required flat config key(s): {missing}")
-
     workflow_type = str(cfg.get("workflow_type", "")).strip().lower()
     if workflow_type not in {"math", "gsm8k", "hotpotqa", "livecodebench", "openclaw_lobster"}:
         raise SystemExit(
             "workflow_type must be one of: math, gsm8k, hotpotqa, livecodebench, openclaw_lobster"
         )
+    required_keys = set(_REQUIRED_FLAT_KEYS)
+    if workflow_type == "openclaw_lobster":
+        required_keys -= {"dataset", "validate_file", "test_file"}
+    missing = sorted([k for k in required_keys if cfg.get(k) in (None, "", [])])
+    if missing:
+        raise SystemExit(f"Missing required flat config key(s): {missing}")
 
     cfg.setdefault("ground_truth_llm", "gpt-5-mini")
     cfg.setdefault("test_split", "test")
@@ -197,7 +229,20 @@ def _validate_flat_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     if not cfg["search_budgets"]:
         raise SystemExit("search_budgets must be a non-empty list in flat config")
 
-    for path_key in ("model_config", "validate_file", "test_file"):
+    model_config = cfg.get("model_config")
+    if not isinstance(model_config, dict):
+        if not isinstance(model_config, str) or not model_config.strip():
+            raise SystemExit("model_config must be a non-empty string or mapping")
+    else:
+        try:
+            validate_model_config_payload(model_config)
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+
+    required_path_keys: List[str] = []
+    if workflow_type != "openclaw_lobster":
+        required_path_keys.extend(["validate_file", "test_file"])
+    for path_key in required_path_keys:
         value = cfg.get(path_key)
         if not isinstance(value, str) or not value.strip():
             raise SystemExit(f"{path_key} must be a non-empty string")
@@ -210,7 +255,9 @@ def _load_yaml(path: Optional[str]) -> Dict[str, Any]:
         return {}
     with open(path, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
-    return _validate_flat_config(data)
+    validated = _validate_flat_config(data)
+    resolved_model_cfg = _resolve_flat_model_config(validated, path)
+    return _resolve_cfg_relative_paths(resolved_model_cfg, path)
 
 
 def _cfg_get(cfg: Dict[str, Any], *keys, default=None):
@@ -220,6 +267,25 @@ def _cfg_get(cfg: Dict[str, Any], *keys, default=None):
             return default
         cur = cur[k]
     return cur
+
+
+def _resolve_cfg_relative_paths(cfg: Dict[str, Any], config_path: str) -> Dict[str, Any]:
+    if not isinstance(cfg, dict):
+        return cfg
+
+    base_dir = Path(config_path).resolve().parent
+    resolved = dict(cfg)
+    for key in _RELATIVE_EXISTING_PATH_KEYS:
+        value = resolved.get(key)
+        if not isinstance(value, str) or not value.strip():
+            continue
+        candidate = Path(value)
+        if candidate.is_absolute() or candidate.exists():
+            continue
+        relative_candidate = base_dir / candidate
+        if relative_candidate.exists():
+            resolved[key] = str(relative_candidate.resolve())
+    return resolved
 
 
 def _arg_get(args: Any, name: str, default: Any = None) -> Any:
@@ -1139,14 +1205,23 @@ def cmd_compile_profile(args, cfg):
         or _cfg_get(cfg, "compile", "workflow_type")
         or ""
     )
+    raw_judge_policies = (
+        _cfg_flat_get(cfg, "judge_policies")
+        or prof.get("judge_policies")
+    )
     profile_training_data = (
         _cfg_flat_get(cfg, "profile_training_data")
         or prof.get("training_data")
+    )
+    raw_openclaw_agent_policies = (
+        _cfg_flat_get(cfg, "openclaw_agent_policies")
+        or prof.get("openclaw_agent_policies")
     )
     openclaw_lobster_workflow_file = (
         _cfg_flat_get(cfg, "openclaw_lobster_workflow_file")
         or prof.get("openclaw_lobster_workflow_file")
     )
+    openclaw_agent_policies = None
     if str(workflow_type).lower() == "openclaw_lobster":
         if not openclaw_lobster_workflow_file:
             raise SystemExit(
@@ -1156,6 +1231,14 @@ def cmd_compile_profile(args, cfg):
             raise SystemExit(
                 "profile_training_data is required when workflow_type=openclaw_lobster for profile."
             )
+        if not raw_openclaw_agent_policies:
+            raise SystemExit(
+                "openclaw_agent_policies is required when workflow_type=openclaw_lobster for profile."
+            )
+        try:
+            openclaw_agent_policies = normalize_openclaw_agent_policies(raw_openclaw_agent_policies)
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
     livecodebench_validate_file = None
     livecodebench_public_test_file = None
     if str(workflow_type).lower() == "livecodebench":
@@ -1180,6 +1263,8 @@ def cmd_compile_profile(args, cfg):
             workflow_type=workflow_type,
             training_data_path=profile_training_data,
             openclaw_lobster_workflow_file=openclaw_lobster_workflow_file,
+            openclaw_agent_policies=openclaw_agent_policies,
+            judge_policies=raw_judge_policies,
         )
     )
     summary_path = Path(output_dir) / "summary_statistics.json"
@@ -1680,6 +1765,80 @@ def cmd_experiments(args, cfg):
     return result
 
 
+def cmd_openclaw(args, cfg):
+    del cfg
+    reporter = get_reporter().child("openclaw")
+    started = time.perf_counter()
+
+    if args.openclaw_command == "stage":
+        manifest_path = stage_openclaw_workspace(
+            args.workflow_file,
+            args.experiment_id,
+            source_root=args.source_root,
+            model_config=args.model_config,
+        )
+        _emit_command_summary(
+            "OpenClaw Stage",
+            f"Manifest: {manifest_path}",
+            f"Elapsed: {_format_elapsed(time.perf_counter() - started)}",
+        )
+        return 0
+
+    if args.openclaw_command == "demo-run":
+        session_path = demo_run_openclaw(
+            args.manifest,
+            args_json=args.args_json,
+            env_json=args.env_json,
+        )
+        session = _read_json(Path(session_path))
+        _emit_command_summary(
+            "OpenClaw Demo Run",
+            f"Status: {session.get('status')}",
+            f"Session: {session_path}",
+            f"Training data: {session.get('training_data_path')}" if session.get("training_data_path") else None,
+            f"Elapsed: {_format_elapsed(time.perf_counter() - started)}",
+        )
+        return 0
+
+    if args.openclaw_command == "demo-resume":
+        session_path = demo_resume_openclaw(
+            args.session,
+            approve=args.approve,
+            env_json=args.env_json,
+        )
+        session = _read_json(Path(session_path))
+        _emit_command_summary(
+            "OpenClaw Demo Resume",
+            f"Status: {session.get('status')}",
+            f"Session: {session_path}",
+            f"Training data: {session.get('training_data_path')}" if session.get("training_data_path") else None,
+            f"Elapsed: {_format_elapsed(time.perf_counter() - started)}",
+        )
+        return 0
+
+    if args.openclaw_command == "analyze-demo":
+        analysis_path = analyze_openclaw_demo(args.manifest)
+        _emit_command_summary(
+            "OpenClaw Analyze Demo",
+            f"Analysis bundle: {analysis_path}",
+            f"Elapsed: {_format_elapsed(time.perf_counter() - started)}",
+        )
+        return 0
+
+    if args.openclaw_command == "validate-config":
+        loaded_cfg = _load_yaml(args.config_path)
+        summary = validate_openclaw_config_payload(loaded_cfg, config_path=args.config_path)
+        _emit_command_summary(
+            "OpenClaw Validate Config",
+            f"Workflow agents: {len(summary.get('workflow_agents', []))}",
+            f"Config: {args.config_path}",
+            f"Elapsed: {_format_elapsed(time.perf_counter() - started)}",
+        )
+        return 0
+
+    raise SystemExit(f"Unknown openclaw command '{args.openclaw_command}'")
+
+
 def main(argv: Optional[List[str]] = None):
     parser = argparse.ArgumentParser(prog="flowcompile")
     parser.add_argument("--config", dest="flow_config", type=str, help="Path to FlowCompile YAML config")
@@ -1816,6 +1975,31 @@ def main(argv: Optional[List[str]] = None):
     )
     exp.add_argument("extra", nargs=argparse.REMAINDER)
 
+    openclaw = subparsers.add_parser("openclaw")
+    openclaw_sub = openclaw.add_subparsers(dest="openclaw_command", required=True)
+
+    oc_stage = openclaw_sub.add_parser("stage")
+    oc_stage.add_argument("--workflow-file", required=True)
+    oc_stage.add_argument("--experiment-id", required=True)
+    oc_stage.add_argument("--source-root")
+    oc_stage.add_argument("--model-config", default="configs/config.qwen35.local.yaml")
+
+    oc_demo_run = openclaw_sub.add_parser("demo-run")
+    oc_demo_run.add_argument("--manifest", required=True)
+    oc_demo_run.add_argument("--args-json")
+    oc_demo_run.add_argument("--env-json")
+
+    oc_demo_resume = openclaw_sub.add_parser("demo-resume")
+    oc_demo_resume.add_argument("--session", required=True)
+    oc_demo_resume.add_argument("--approve", default="yes")
+    oc_demo_resume.add_argument("--env-json")
+
+    oc_analyze = openclaw_sub.add_parser("analyze-demo")
+    oc_analyze.add_argument("--manifest", required=True)
+
+    oc_validate = openclaw_sub.add_parser("validate-config")
+    oc_validate.add_argument("--config", dest="config_path", required=True)
+
     args = parser.parse_args(argv)
     cfg = _load_yaml(args.flow_config)
 
@@ -1833,9 +2017,19 @@ def main(argv: Optional[List[str]] = None):
     reporter.banner()
 
     # Optional: set model config path for LLMs
-    models_config_path = _cfg_flat_get(cfg, "model_config") or _cfg_get(cfg, "models", "config_path")
-    if models_config_path:
-        os.environ["WORKFLOW_COMPILER_CONFIG"] = str(models_config_path)
+    model_config_payload = _cfg_flat_get(cfg, "model_config")
+    if isinstance(model_config_payload, dict):
+        set_default_model_config_payload(model_config_payload)
+        os.environ[MODEL_CONFIG_JSON_ENV] = serialize_model_config_payload(model_config_payload)
+        os.environ.pop("WORKFLOW_COMPILER_CONFIG", None)
+    elif model_config_payload:
+        set_default_model_config_payload(None)
+        os.environ["WORKFLOW_COMPILER_CONFIG"] = str(model_config_payload)
+        os.environ.pop(MODEL_CONFIG_JSON_ENV, None)
+    else:
+        set_default_model_config_payload(None)
+        os.environ.pop("WORKFLOW_COMPILER_CONFIG", None)
+        os.environ.pop(MODEL_CONFIG_JSON_ENV, None)
 
     try:
         if args.command == "get-latency":
@@ -1862,6 +2056,9 @@ def main(argv: Optional[List[str]] = None):
 
         if args.command == "experiments":
             return cmd_experiments(args, cfg)
+
+        if args.command == "openclaw":
+            return cmd_openclaw(args, cfg)
 
         return 0
     finally:

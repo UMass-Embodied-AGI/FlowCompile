@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from workflow_compiler.dsl.torchlike import WorkflowModule, AgentNode, ToolNode
+from workflow_compiler.workflows.math.judges import get_profiling_judges
 
 
 class MathWorkflowDSL(WorkflowModule):
@@ -33,6 +34,9 @@ class MathWorkflowDSL(WorkflowModule):
             "full_solution": best,
             "final_solution": best,
         }
+
+    def get_profiling_judges(self):
+        return get_profiling_judges()
 
 
 __all__ = [

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 from workflow_compiler.core.terminal import get_reporter
+from workflow_compiler.core.llm.config import load_model_config_payload
 
 
 def _configure_cuda_multiprocessing() -> None:
@@ -262,21 +263,28 @@ def _maybe_int(value: Any) -> Optional[int]:
         return None
 
 
-def _load_model_routes(model_config_path: str) -> List[Dict[str, Any]]:
-    yaml = _require_yaml_dep()
-
-    with open(model_config_path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
+def _load_model_routes(
+    model_config_path: Union[str, Dict[str, Any]],
+    endpoint_role: Optional[str] = None,
+    endpoint_override: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    data = load_model_config_payload(model_config_path)
 
     raw_models = data.get("models", data)
-    if not isinstance(raw_models, dict):
-        raise ValueError(f"Invalid model config format in {model_config_path}")
+    endpoints = data.get("endpoints") if isinstance(data.get("endpoints"), dict) else {}
 
     routes: List[Dict[str, Any]] = []
     for name, cfg in raw_models.items():
         if not isinstance(cfg, dict):
             continue
-        base_url = cfg.get("base_url")
+        if endpoint_override:
+            base_url = endpoint_override
+        elif endpoint_role == "latency":
+            base_url = endpoints.get("local_base_url") or cfg.get("base_url")
+        elif endpoint_role == "profile":
+            base_url = endpoints.get("profile_base_url") or cfg.get("base_url")
+        else:
+            base_url = cfg.get("base_url") or endpoints.get("local_base_url")
         api_key = cfg.get("api_key") or cfg.get("key") or os.environ.get("OPENAI_API_KEY")
         if not base_url or not api_key:
             continue
@@ -655,7 +663,7 @@ def _run_latency_benchmark_openai(
     model_config_path: str,
 ) -> Dict[str, Any]:
     AsyncOpenAI = _require_openai_dep()
-    routes = _load_model_routes(model_config_path)
+    routes = _load_model_routes(model_config_path, endpoint_role="latency")
     if not routes:
         raise ValueError(
             f"No OpenAI-compatible model routes found in model config: {model_config_path}"

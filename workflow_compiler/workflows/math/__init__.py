@@ -7,6 +7,7 @@ from .agents import (
     ProgrammerAgent,
     EnsembleAgent,
 )
+from .judges import get_profiling_judges
 from .workflow import MathWorkflowDSL
 
 __all__ = [
@@ -16,5 +17,6 @@ __all__ = [
     "RefineSolverAgent",
     "ProgrammerAgent",
     "EnsembleAgent",
+    "get_profiling_judges",
     "MathWorkflowDSL",
 ]

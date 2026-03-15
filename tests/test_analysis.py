@@ -47,6 +47,19 @@ class TestModelNameMapping:
         assert get_hf_model_name("qwen3-8b", model_config_path=model_config_path) == "Qwen/Qwen3-8B"
         assert get_hf_model_name("qwen3-8b-route", model_config_path=model_config_path) == "Qwen/Qwen3-8B"
 
+    def test_get_hf_model_name_accepts_model_config_mapping(self):
+        model_config = {
+            "models": {
+                "qwen3-4b": {"hf_model_name": "Qwen/Qwen3-4B"},
+                "qwen3-8b-route": {
+                    "model": "qwen3-8b",
+                    "hf_model_name": "Qwen/Qwen3-8B",
+                },
+            }
+        }
+        assert get_hf_model_name("qwen3-4b", model_config_path=model_config) == "Qwen/Qwen3-4B"
+        assert get_hf_model_name("qwen3-8b", model_config_path=model_config) == "Qwen/Qwen3-8B"
+
     def test_get_hf_model_name_missing_alias_raises(self, model_config_path: str):
         with pytest.raises(ValueError, match="unknown"):
             get_hf_model_name("unknown", model_config_path=model_config_path)
@@ -112,6 +125,16 @@ class TestLatencyCalculation:
         assert "Qwen/Qwen3-4B" in data
         assert "prefill_latency_per_token" in data["Qwen/Qwen3-4B"]
         assert "decode_latency_per_token" in data["Qwen/Qwen3-4B"]
+
+    def test_get_default_latency_data_accepts_model_config_mapping(self):
+        data = get_default_latency_data(
+            model_config_path={
+                "models": {
+                    "qwen3-4b": {"hf_model_name": "Qwen/Qwen3-4B"},
+                }
+            }
+        )
+        assert "Qwen/Qwen3-4B" in data
 
     def test_calculate_latency(self, model_config_path: str):
         latency_data = {

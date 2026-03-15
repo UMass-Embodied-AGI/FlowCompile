@@ -6,6 +6,11 @@ from types import SimpleNamespace
 import pytest
 
 from workflow_compiler.core.llm import client
+from workflow_compiler.core.llm.config import (
+    MODEL_CONFIG_JSON_ENV,
+    serialize_model_config_payload,
+    set_default_model_config_payload,
+)
 from workflow_compiler.core.llm.thinking_budget import (
     DEFAULT_THINKING_BUDGET_CUTOFF_TEXT,
 )
@@ -108,3 +113,70 @@ def test_integer_budget_vllm_backend_surfaces_passthrough_errors(monkeypatch):
     llm = client.AsyncLLM(_build_cfg())
     with pytest.raises(RuntimeError, match="LiteLLM preserves extra_body.vllm_xargs"):
         asyncio.run(llm.call_with_thinking_budget("Solve", 5))
+
+
+def test_create_llm_instance_uses_profile_endpoint_role(monkeypatch, tmp_path):
+    config_path = tmp_path / "models.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "endpoints:",
+                '  local_base_url: "http://127.0.0.1:4000"',
+                '  profile_base_url: "http://profile-host:4000"',
+                "models:",
+                "  qwen35-9b-awq:",
+                '    api_type: "openai"',
+                '    api_key: "dummy"',
+                '    hf_model_name: "QuantTrio/Qwen3.5-9B-AWQ"',
+                "    enable_thinking_budget: true",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    created = []
+
+    def factory(*args, **kwargs):
+        created.append(kwargs)
+        return _DummyOpenAIClient(*args, **kwargs)
+
+    monkeypatch.setenv("WORKFLOW_COMPILER_CONFIG", str(config_path))
+    monkeypatch.setattr(client, "AsyncOpenAI", factory)
+    client.LLMsConfig._default_config = None
+
+    try:
+        llm = client.create_llm_instance("qwen35-9b-awq", endpoint_role="profile")
+    finally:
+        client.LLMsConfig._default_config = None
+
+    assert llm._request_model == "qwen35-9b-awq"
+    assert created[0]["base_url"] == "http://profile-host:4000"
+
+
+def test_default_endpoint_role_falls_back_to_local_base_url(monkeypatch, tmp_path):
+    payload = {
+        "endpoints": {
+            "local_base_url": "http://127.0.0.1:4000",
+            "profile_base_url": "http://profile-host:4000",
+        },
+        "models": {
+            "qwen35-4b": {
+                "api_type": "openai",
+                "api_key": "dummy",
+                "hf_model_name": "Qwen/Qwen3.5-4B",
+                "enable_thinking_budget": True,
+            }
+        },
+    }
+
+    monkeypatch.setenv(MODEL_CONFIG_JSON_ENV, serialize_model_config_payload(payload))
+    set_default_model_config_payload(payload)
+    client.LLMsConfig._default_config = None
+
+    try:
+        cfg = client.LLMsConfig.default().get("qwen35-4b")
+    finally:
+        set_default_model_config_payload(None)
+        client.LLMsConfig._default_config = None
+
+    assert cfg.base_url == "http://127.0.0.1:4000"

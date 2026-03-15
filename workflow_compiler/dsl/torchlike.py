@@ -20,13 +20,16 @@ import builtins
 import inspect
 import textwrap
 from contextlib import contextmanager
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
 from workflow_compiler.dsl.structure_inference import infer_structures
+
+if TYPE_CHECKING:
+    from workflow_compiler.compiler.judge_types import WorkflowJudgeRegistry
 
 
 # =========================
@@ -637,6 +640,9 @@ class WorkflowModule:
 
     def infer_profiling_agents(self) -> List[str]:
         return self.infer_agent_names()
+
+    def get_profiling_judges(self) -> "WorkflowJudgeRegistry":
+        return {}
 
     @staticmethod
     def _count_agent_settings(

@@ -24,6 +24,7 @@ from workflow_compiler.core.llm.thinking_budget import (
     THINKING_BUDGET_HF_MODEL_ARG_NAME,
     THINKING_CUTOFF_TEXT_ARG_NAME,
 )
+from workflow_compiler.core.llm.config import load_model_config_payload
 
 class LLMConfig:
     def __init__(self, config: dict):
@@ -63,49 +64,36 @@ class LLMsConfig:
     
     def __init__(self, config_dict: Optional[Dict[str, Any]] = None):
         """Initialize with an optional configuration dictionary"""
-        self.configs = config_dict or {}
+        payload = config_dict or {}
+        self.endpoints: Dict[str, Any] = {}
+        if "models" in payload and isinstance(payload.get("models"), dict):
+            self.configs = payload.get("models") or {}
+            if isinstance(payload.get("endpoints"), dict):
+                self.endpoints = dict(payload.get("endpoints") or {})
+        else:
+            self.configs = payload
     
     @classmethod
     def default(cls):
         """Get or create a default configuration from YAML file"""
         if cls._default_config is None:
-            # Look for the config file in common locations
-            env_config = os.environ.get("WORKFLOW_COMPILER_CONFIG")
-            if env_config and Path(env_config).exists():
-                config_file = Path(env_config)
-            else:
-                config_file = None
-            config_paths = [
-                Path("configs/config.yaml"),
-                Path("config.yaml"),
-                Path("./configs/config.yaml"),
-                # Backward-compatible fallbacks
-                Path("configs/config2.yaml"),
-                Path("config2.yaml"),
-                Path("./configs/config2.yaml"),
-            ]
-            if config_file is None:
-                for path in config_paths:
-                    if path.exists():
-                        config_file = path
-                        break
-            
-            if config_file is None:
-                raise FileNotFoundError("No default configuration file found in the expected locations")
-            
-            # Load the YAML file
-            with open(config_file, 'r', encoding='utf-8') as f:
-                config_data = yaml.safe_load(f)
-            
-            # Your YAML has a 'models' top-level key that contains the model configs
-            if 'models' in config_data:
-                config_data = config_data['models']
-                
+            config_data = load_model_config_payload()
             cls._default_config = cls(config_data)
         
         return cls._default_config
     
-    def get(self, llm_name: str) -> LLMConfig:
+    def _resolve_base_url(self, config: Dict[str, Any], endpoint_role: Optional[str] = None) -> Optional[str]:
+        role = str(endpoint_role).strip().lower() if endpoint_role is not None else None
+        if role not in {None, "latency", "profile"}:
+            raise ValueError(f"Unsupported endpoint_role '{endpoint_role}'")
+
+        if role == "latency":
+            return self.endpoints.get("local_base_url") or config.get("base_url")
+        if role == "profile":
+            return self.endpoints.get("profile_base_url") or config.get("base_url")
+        return config.get("base_url") or self.endpoints.get("local_base_url")
+
+    def get(self, llm_name: str, endpoint_role: Optional[str] = None) -> LLMConfig:
         """Get the configuration for a specific LLM by name"""
         if llm_name not in self.configs:
             raise ValueError(f"Configuration for {llm_name} not found")
@@ -123,7 +111,10 @@ class LLMsConfig:
 
         if "key" not in llm_config:
             llm_config["key"] = llm_config.get("api_key")
-        if "base_url" not in llm_config:
+        resolved_base_url = self._resolve_base_url(config, endpoint_role=endpoint_role)
+        if resolved_base_url:
+            llm_config["base_url"] = resolved_base_url
+        elif "base_url" not in llm_config:
             llm_config["base_url"] = "https://oneapi.deepwisdom.ai/v1"
         
         # Create and return an LLMConfig instance with the specified configuration
@@ -491,24 +482,35 @@ class AsyncLLM:
         await self.usage_tracker.aclose()
     
 
-def create_llm_instance(llm_config):
+def create_llm_instance(llm_config, endpoint_role: Optional[str] = None):
     """
     Create an AsyncLLM instance using the provided configuration
     
     Args:
         llm_config: Either an LLMConfig instance, a dictionary of configuration values,
                             or a string representing the LLM name to look up in default config
+        endpoint_role: Optional route role. Supported values: "latency", "profile".
     
     Returns:
         An instance of AsyncLLM configured according to the provided parameters
     """
     # Case 1: llm_config is already an LLMConfig instance
     if isinstance(llm_config, LLMConfig):
+        if endpoint_role:
+            try:
+                refreshed = LLMsConfig.default().get(
+                    llm_config.name or llm_config.model,
+                    endpoint_role=endpoint_role,
+                )
+                return AsyncLLM(refreshed)
+            except ValueError:
+                pass
         return AsyncLLM(llm_config)
     
     # Case 2: llm_config is a string (LLM name)
     elif isinstance(llm_config, str):
-        return AsyncLLM(llm_config)  # AsyncLLM constructor handles lookup
+        resolved = LLMsConfig.default().get(llm_config, endpoint_role=endpoint_role)
+        return AsyncLLM(resolved)
     
     # Case 3: llm_config is a dictionary
     elif isinstance(llm_config, dict):

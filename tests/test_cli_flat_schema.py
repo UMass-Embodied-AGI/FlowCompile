@@ -5,6 +5,13 @@ from types import SimpleNamespace
 import pytest
 
 from workflow_compiler.core import cli
+from workflow_compiler.compiler import latency
+from workflow_compiler.core.llm import client
+from workflow_compiler.core.llm.config import (
+    MODEL_CONFIG_JSON_ENV,
+    serialize_model_config_payload,
+    set_default_model_config_payload,
+)
 
 
 def _write_json(path: Path, payload):
@@ -16,6 +23,28 @@ def _write_json(path: Path, payload):
 def _write_text(path: Path, text: str):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
+
+
+def _write_model_config(path: Path, *, local_url: str = "http://127.0.0.1:4000", profile_url: str = "http://profile-host:4000"):
+    _write_text(
+        path,
+        "\n".join(
+            [
+                "endpoints:",
+                f'  local_base_url: "{local_url}"',
+                f'  profile_base_url: "{profile_url}"',
+                "models:",
+                "  qwen35-9b-awq:",
+                '    api_type: "openai"',
+                '    api_key: "dummy"',
+                '    hf_model_name: "QuantTrio/Qwen3.5-9B-AWQ"',
+                "  qwen3-4b:",
+                '    api_type: "openai"',
+                '    api_key: "dummy"',
+                '    hf_model_name: "Qwen/Qwen3-4B"',
+            ]
+        ),
+    )
 
 
 def _flat_cfg(**overrides):
@@ -33,6 +62,31 @@ def _flat_cfg(**overrides):
     }
     base.update(overrides)
     return base
+
+
+def _openclaw_policies():
+    return {
+        "summarize_each": {
+            "required_fields": ["summary"],
+            "judge": {
+                "mode": "semantic_llm",
+                "prompt": "Judge summary\\nGT: {ground_truth_field}\\nPred: {predicted_field}",
+            },
+        },
+        "classify": {
+            "required_fields": ["category"],
+            "judge": {"mode": "strict_exact"},
+        },
+    }
+
+
+def _judge_policies():
+    return {
+        "programmer": {
+            "mode": "semantic_llm",
+            "prompt": "Expected Output:\\n{ground_truth}\\nActual Output:\\n{exec_output}",
+        },
+    }
 
 
 def _empty_test_args():
@@ -152,6 +206,127 @@ def test_load_yaml_rejects_legacy_nested_keys(tmp_path: Path):
 
     with pytest.raises(SystemExit, match="Unsupported nested/legacy top-level keys"):
         cli._load_yaml(str(cfg_path))
+
+
+def test_load_yaml_accepts_openclaw_without_benchmark_only_keys(tmp_path: Path):
+    cfg_path = tmp_path / "openclaw.yaml"
+    workflow_file = tmp_path / "wf" / "workflows" / "demo.lobster.yaml"
+    training_file = tmp_path / "wf" / "flowcompile_training.json"
+    model_config = tmp_path / "configs" / "config.qwen35.local.yaml"
+    workflow_file.parent.mkdir(parents=True, exist_ok=True)
+    workflow_file.write_text("name: demo\nversion: 1\nsteps: []\n", encoding="utf-8")
+    training_file.parent.mkdir(parents=True, exist_ok=True)
+    training_file.write_text('{"training_data":[]}', encoding="utf-8")
+    _write_model_config(model_config)
+    cfg_path.write_text(
+        "\n".join(
+            [
+                'schema_version: "flowcompile.flat.v1"',
+                'experiment_id: "exp1"',
+                'workflow_type: "openclaw_lobster"',
+                'model_config: "configs/config.qwen35.local.yaml"',
+                'openclaw_lobster_workflow_file: "wf/workflows/demo.lobster.yaml"',
+                'profile_training_data: "wf/flowcompile_training.json"',
+                'predict_trace_data: "wf/flowcompile_training.json"',
+                "search_axes: ['model', 'budget']",
+                "search_budgets: [10, 200]",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = cli._load_yaml(str(cfg_path))
+
+    assert loaded["workflow_type"] == "openclaw_lobster"
+    assert isinstance(loaded["model_config"], dict)
+    assert "models" in loaded["model_config"]
+
+
+def test_load_yaml_resolves_openclaw_paths_relative_to_config_location(tmp_path: Path):
+    cfg_dir = tmp_path / "results" / "exp" / "openclaw"
+    cfg_path = cfg_dir / "flowcompile_openclaw.yaml"
+    workflow_file = cfg_dir / "staged_workspace" / "workflows" / "demo.lobster.yaml"
+    training_file = cfg_dir / "flowcompile_training.json"
+    model_config = cfg_dir / "config.qwen35.local.yaml"
+    workflow_file.parent.mkdir(parents=True, exist_ok=True)
+    workflow_file.write_text(
+        "\n".join(
+            [
+                "name: demo",
+                "version: 1",
+                "steps:",
+                "  - id: summarize_each",
+                "    command: ./bin/outlook_llm_summarize_each",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    training_file.write_text('{"training_data":[]}', encoding="utf-8")
+    _write_model_config(model_config)
+    cfg_path.write_text(
+        "\n".join(
+            [
+                'schema_version: "flowcompile.flat.v1"',
+                'experiment_id: "exp1"',
+                'workflow_type: "openclaw_lobster"',
+                'model_config: "config.qwen35.local.yaml"',
+                'openclaw_lobster_workflow_file: "staged_workspace/workflows/demo.lobster.yaml"',
+                'profile_training_data: "flowcompile_training.json"',
+                'predict_trace_data: "flowcompile_training.json"',
+                "search_axes: ['model', 'budget']",
+                "search_budgets: [10, 200]",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = cli._load_yaml(str(cfg_path))
+
+    assert isinstance(loaded["model_config"], dict)
+    assert loaded["model_config"]["models"]["qwen35-9b-awq"]["hf_model_name"] == "QuantTrio/Qwen3.5-9B-AWQ"
+    assert loaded["openclaw_lobster_workflow_file"] == str(workflow_file.resolve())
+    assert loaded["profile_training_data"] == str(training_file.resolve())
+    assert loaded["predict_trace_data"] == str(training_file.resolve())
+
+
+def test_load_yaml_accepts_inline_model_config_and_resolves_to_mapping(tmp_path: Path):
+    cfg_path = tmp_path / "inline_model_config.yaml"
+    validate_file = tmp_path / "data" / "validate.jsonl"
+    test_file = tmp_path / "data" / "test.jsonl"
+    validate_file.parent.mkdir(parents=True, exist_ok=True)
+    validate_file.write_text('{"problem":"x"}\n', encoding="utf-8")
+    test_file.write_text('{"problem":"x"}\n', encoding="utf-8")
+    cfg_path.write_text(
+        "\n".join(
+            [
+                'schema_version: "flowcompile.flat.v1"',
+                'experiment_id: "exp_inline"',
+                'workflow_type: "math"',
+                'dataset: "MATH500"',
+                "model_config:",
+                "  endpoints:",
+                '    local_base_url: "http://127.0.0.1:4000"',
+                '    profile_base_url: "http://profile-host:4000"',
+                "  models:",
+                "    qwen3-4b:",
+                '      api_type: "openai"',
+                '      api_key: "dummy"',
+                '      hf_model_name: "Qwen/Qwen3-4B"',
+                'validate_file: "data/validate.jsonl"',
+                'test_file: "data/test.jsonl"',
+                "search_axes: ['model', 'budget', 'structure']",
+                "search_budgets: [10, 200]",
+                "latency_models: ['Qwen/Qwen3-4B']",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = cli._load_yaml(str(cfg_path))
+
+    assert isinstance(loaded["model_config"], dict)
+    assert loaded["model_config"]["endpoints"]["profile_base_url"] == "http://profile-host:4000"
+    assert loaded["model_config"]["models"]["qwen3-4b"]["hf_model_name"] == "Qwen/Qwen3-4B"
 
 
 def test_load_yaml_rejects_validate_process_keys(tmp_path: Path):
@@ -359,6 +534,7 @@ models:
 
 def test_load_yaml_sets_latency_models_and_ground_truth_llm_defaults(tmp_path: Path):
     cfg_path = tmp_path / "defaults.yaml"
+    _write_model_config(tmp_path / "configs" / "config.yaml")
     cfg_path.write_text(
         "\n".join(
             [
@@ -379,6 +555,7 @@ def test_load_yaml_sets_latency_models_and_ground_truth_llm_defaults(tmp_path: P
     loaded = cli._load_yaml(str(cfg_path))
     assert loaded["ground_truth_llm"] == "gpt-5-mini"
     assert loaded["ground_truth_task"] == "math500"
+    assert isinstance(loaded["model_config"], dict)
     assert loaded["latency_models"] == [
         "Qwen/Qwen3-0.6B",
         "Qwen/Qwen3-1.7B",
@@ -454,9 +631,10 @@ def test_cmd_compile_profile_uses_flat_min_samples_per_agent(monkeypatch):
 
     monkeypatch.setattr(cli, "run_profiling", fake_run_profiling)
 
-    cfg = _flat_cfg(min_samples_per_agent=321)
+    cfg = _flat_cfg(min_samples_per_agent=321, judge_policies=_judge_policies())
     assert cli.cmd_compile_profile(_empty_profile_args(), cfg) == 0
     assert captured["min_samples_per_agent"] == 321
+    assert captured["judge_policies"] == _judge_policies()
 
 
 def test_cmd_compile_profile_prefers_profile_specific_min_samples(monkeypatch):
@@ -468,7 +646,7 @@ def test_cmd_compile_profile_prefers_profile_specific_min_samples(monkeypatch):
 
     monkeypatch.setattr(cli, "run_profiling", fake_run_profiling)
 
-    cfg = _flat_cfg(min_samples_per_agent=321, profile_min_samples_per_agent=123)
+    cfg = _flat_cfg(min_samples_per_agent=321, profile_min_samples_per_agent=123, judge_policies=_judge_policies())
     assert cli.cmd_compile_profile(_empty_profile_args(), cfg) == 0
     assert captured["min_samples_per_agent"] == 123
 
@@ -482,6 +660,7 @@ def test_cmd_compile_profile_requires_openclaw_lobster_inputs(monkeypatch):
     cfg_missing_workflow = _flat_cfg(
         workflow_type="openclaw_lobster",
         profile_training_data="data/outlook_training.json",
+        openclaw_agent_policies=_openclaw_policies(),
     )
     with pytest.raises(SystemExit, match="openclaw_lobster_workflow_file is required"):
         cli.cmd_compile_profile(_empty_profile_args(), cfg_missing_workflow)
@@ -489,9 +668,18 @@ def test_cmd_compile_profile_requires_openclaw_lobster_inputs(monkeypatch):
     cfg_missing_training = _flat_cfg(
         workflow_type="openclaw_lobster",
         openclaw_lobster_workflow_file="workflows/outlook.lobster.yaml",
+        openclaw_agent_policies=_openclaw_policies(),
     )
     with pytest.raises(SystemExit, match="profile_training_data is required"):
         cli.cmd_compile_profile(_empty_profile_args(), cfg_missing_training)
+
+    cfg_missing_policies = _flat_cfg(
+        workflow_type="openclaw_lobster",
+        openclaw_lobster_workflow_file="workflows/outlook.lobster.yaml",
+        profile_training_data="data/outlook_training.json",
+    )
+    with pytest.raises(SystemExit, match="openclaw_agent_policies is required"):
+        cli.cmd_compile_profile(_empty_profile_args(), cfg_missing_policies)
 
 
 def test_cmd_compile_profile_forwards_openclaw_lobster_inputs(monkeypatch):
@@ -507,11 +695,15 @@ def test_cmd_compile_profile_forwards_openclaw_lobster_inputs(monkeypatch):
         workflow_type="openclaw_lobster",
         openclaw_lobster_workflow_file="workflows/outlook.lobster.yaml",
         profile_training_data="data/outlook_training.json",
+        openclaw_agent_policies=_openclaw_policies(),
+        judge_policies=_judge_policies(),
     )
     assert cli.cmd_compile_profile(_empty_profile_args(), cfg) == 0
     assert captured["workflow_type"] == "openclaw_lobster"
     assert captured["openclaw_lobster_workflow_file"] == "workflows/outlook.lobster.yaml"
     assert captured["training_data_path"] == "data/outlook_training.json"
+    assert captured["openclaw_agent_policies"]["classify"]["mode"] == "strict_exact"
+    assert captured["judge_policies"] == _judge_policies()
 
 
 def test_cmd_compile_predict_forwards_openclaw_lobster_workflow_file(monkeypatch, tmp_path: Path):
@@ -569,3 +761,61 @@ def test_cmd_compile_predict_requires_openclaw_lobster_workflow_file(monkeypatch
     )
     with pytest.raises(SystemExit, match="openclaw_lobster_workflow_file is required"):
         cli.cmd_compile_predict(_empty_predict_args(), cfg)
+
+
+def test_openclaw_model_config_supports_separate_latency_and_profile_endpoints(monkeypatch, tmp_path: Path):
+    cfg_dir = tmp_path / "results" / "exp" / "openclaw"
+    cfg_path = cfg_dir / "flowcompile_openclaw.yaml"
+    workflow_file = cfg_dir / "staged_workspace" / "workflows" / "demo.lobster.yaml"
+    training_file = cfg_dir / "flowcompile_training.json"
+    model_config = cfg_dir / "config.qwen35.local.yaml"
+
+    workflow_file.parent.mkdir(parents=True, exist_ok=True)
+    workflow_file.write_text("name: demo\nversion: 1\nsteps: []\n", encoding="utf-8")
+    training_file.write_text('{"training_data":[]}', encoding="utf-8")
+    model_config.write_text(
+        "\n".join(
+            [
+                "endpoints:",
+                '  local_base_url: "http://127.0.0.1:4000"',
+                '  profile_base_url: "http://profile-host:4000"',
+                "models:",
+                "  qwen35-9b-awq:",
+                '    api_type: "openai"',
+                '    api_key: "dummy"',
+                '    hf_model_name: "QuantTrio/Qwen3.5-9B-AWQ"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg_path.write_text(
+        "\n".join(
+            [
+                'schema_version: "flowcompile.flat.v1"',
+                'experiment_id: "exp1"',
+                'workflow_type: "openclaw_lobster"',
+                'model_config: "config.qwen35.local.yaml"',
+                'openclaw_lobster_workflow_file: "staged_workspace/workflows/demo.lobster.yaml"',
+                'profile_training_data: "flowcompile_training.json"',
+                'predict_trace_data: "flowcompile_training.json"',
+                "search_axes: ['model', 'budget']",
+                "search_budgets: [10, 200]",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = cli._load_yaml(str(cfg_path))
+    latency_routes = latency._load_model_routes(loaded["model_config"], endpoint_role="latency")
+
+    set_default_model_config_payload(loaded["model_config"])
+    monkeypatch.setenv(MODEL_CONFIG_JSON_ENV, serialize_model_config_payload(loaded["model_config"]))
+    client.LLMsConfig._default_config = None
+    try:
+        profile_cfg = client.LLMsConfig.default().get("qwen35-9b-awq", endpoint_role="profile")
+    finally:
+        set_default_model_config_payload(None)
+        client.LLMsConfig._default_config = None
+
+    assert latency_routes[0]["base_url"] == "http://127.0.0.1:4000"
+    assert profile_cfg.base_url == "http://profile-host:4000"

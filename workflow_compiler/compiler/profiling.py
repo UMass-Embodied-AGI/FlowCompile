@@ -43,7 +43,6 @@ WHAT THIS SCRIPT DOES:
 """
 
 import asyncio
-import concurrent.futures
 import json
 import random
 import re
@@ -56,16 +55,49 @@ from typing import Dict, List, Tuple, Optional, Any
 from collections import defaultdict, Counter
 from tqdm.asyncio import tqdm
 
+from workflow_compiler.compiler.judge_types import JudgeContext, JudgeResult
 from workflow_compiler.core.llm.client import AsyncLLM, create_llm_instance
 from workflow_compiler.core.workflow.operators import run_code
-from workflow_compiler.core.llm.formatter import XmlFormatter
-from workflow_compiler.core.workflow.operators import ScEnsembleOp, AnswerGenerateOp
 from workflow_compiler.benchmarks.livecodebench import evaluate_generations_by_problem
 from workflow_compiler.core.data_paths import resolve_existing_path
 from concurrent.futures import ProcessPoolExecutor
 from workflow_compiler.workflows.dsl_registry import get_workflow_module
+from workflow_compiler.integration.openclaw import normalize_openclaw_agent_policies
 
 GLOBAL_DEFAULT_SEARCH_BUDGETS = (10, 200, 400, 800, 1000, 1500, 2000, 3000, 4000, 5000)
+VALID_JUDGE_POLICY_MODES = {"semantic_llm"}
+
+
+def normalize_judge_policies(raw: Any) -> Dict[str, Dict[str, Any]]:
+    if raw in (None, "", {}):
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError("judge_policies must be a mapping of agent -> policy")
+
+    normalized: Dict[str, Dict[str, Any]] = {}
+    for raw_agent, raw_policy in raw.items():
+        agent_name = str(raw_agent or "").strip()
+        if not agent_name:
+            raise ValueError("judge_policies contains an empty agent name")
+        if not isinstance(raw_policy, dict):
+            raise ValueError(f"judge_policies[{agent_name!r}] must be a mapping")
+
+        mode = str(raw_policy.get("mode") or "").strip().lower()
+        if mode not in VALID_JUDGE_POLICY_MODES:
+            raise ValueError(
+                f"judge_policies[{agent_name!r}].mode must be one of: "
+                f"{', '.join(sorted(VALID_JUDGE_POLICY_MODES))}"
+            )
+
+        prompt = str(raw_policy.get("prompt") or "").strip()
+        if not prompt:
+            raise ValueError(f"judge_policies[{agent_name!r}].prompt is required")
+
+        normalized[agent_name] = {
+            "mode": mode,
+            "prompt": prompt,
+        }
+    return normalized
 
 
 def _run_code_in_subprocess(code: str, result_queue) -> None:
@@ -83,6 +115,8 @@ def get_experiment_config(
     workflow_type: Optional[str] = None,
     training_data_path: Optional[str] = None,
     openclaw_lobster_workflow_file: Optional[str] = None,
+    openclaw_agent_policies: Optional[Dict[str, Any]] = None,
+    judge_policies: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Get benchmark configuration based on experiment ID.
@@ -179,7 +213,10 @@ def get_experiment_config(
         "workflow_type": resolved_workflow_type,
         "search_budgets": selected_search_budgets,
         "agent_names": inferred_agents,
+        "workflow_module": workflow_module,
+        "workflow_judges": workflow_module.get_profiling_judges(),
         "openclaw_lobster_workflow_file": openclaw_lobster_workflow_file,
+        "openclaw_agent_policies": normalize_openclaw_agent_policies(openclaw_agent_policies),
     }
 
 
@@ -225,7 +262,10 @@ class BenchmarkConfig:
     SEARCH_BUDGETS = None
     AGENT_NAMES = None
     WORKFLOW_TYPE = None
+    WORKFLOW_MODULE = None
+    WORKFLOW_JUDGES = None
     OPENCLAW_LOBSTER_WORKFLOW_FILE = None
+    OPENCLAW_AGENT_POLICIES = None
     LIVECODEBENCH_VALIDATE_PATH = "data/livecodebench_validate.jsonl"
     LIVECODEBENCH_PUBLIC_TEST_PATH = "data/livecodebench_public_test.jsonl"
     
@@ -237,6 +277,8 @@ class BenchmarkConfig:
         workflow_type: Optional[str] = None,
         training_data_path: Optional[str] = None,
         openclaw_lobster_workflow_file: Optional[str] = None,
+        openclaw_agent_policies: Optional[Dict[str, Any]] = None,
+        judge_policies: Optional[Dict[str, Any]] = None,
     ):
         """
         Initialize configuration from experiment ID.
@@ -250,13 +292,23 @@ class BenchmarkConfig:
             workflow_type=workflow_type,
             training_data_path=training_data_path,
             openclaw_lobster_workflow_file=openclaw_lobster_workflow_file,
+            openclaw_agent_policies=openclaw_agent_policies,
+            judge_policies=judge_policies,
         )
         cls.TRAINING_DATA_PATH = config["training_data_path"]
         cls.OUTPUT_DIR = config["output_dir"]
         cls.SEARCH_BUDGETS = config["search_budgets"]
         cls.AGENT_NAMES = config["agent_names"]
         cls.WORKFLOW_TYPE = config["workflow_type"]
+        cls.WORKFLOW_MODULE = config.get("workflow_module")
+        cls.WORKFLOW_JUDGES = config.get("workflow_judges") or {}
         cls.OPENCLAW_LOBSTER_WORKFLOW_FILE = config.get("openclaw_lobster_workflow_file")
+        cls.OPENCLAW_AGENT_POLICIES = config.get("openclaw_agent_policies") or None
+        if judge_policies and cls.WORKFLOW_TYPE != "openclaw_lobster":
+            print(
+                "Warning: judge_policies are ignored for built-in workflows; "
+                "define workflow-owned judges in workflow_compiler/workflows/<workflow>/judges.py."
+            )
         
         print(f"\n{'='*80}")
         print(f"Configuration loaded for experiment: {experiment_id}")
@@ -272,275 +324,19 @@ class BenchmarkConfig:
 class JudgeEvaluator:
     """Evaluates model outputs using a judge model"""
 
-    MATH_JUDGE_PROMPT = """You are evaluating a mathematical solution.
-
-Ground Truth:
-{ground_truth}
-
-Model Output:
-{model_output}
-
-Task: Compare the final answers (e.g., \\boxed{{...}}) from the model output to the ground truth. Ignore minor formatting differences.
-
-Respond with ONLY ONE WORD:
-- "CORRECT" if final answers match
-- "INCORRECT" if they differ
-
-Judgment:"""
-    
-    HOTPOTQA_JUDGE_PROMPT = """You are evaluating a question answering output.
-
-Question:
-{question}
-
-Ground Truth Answer:
-{ground_truth}
-
-Model Output:
-{model_output}
-
-Task: Compare the answer in the model output with the ground truth. Consider semantic equivalence - answers can be phrased differently but mean the same thing. Ignore minor formatting differences.
-
-Respond with ONLY ONE WORD:
-- "CORRECT" if answers are semantically equivalent
-- "INCORRECT" if they differ in meaning
-
-Judgment:"""
-
-    OPENCLAW_SUMMARY_JUDGE_PROMPT = """You are evaluating an email summary.
-
-Field under evaluation: summary
-
-Original instruction for this sample:
-{input_prompt}
-
-Ground Truth Summary:
-{ground_truth_field}
-
-Predicted Summary:
-{predicted_field}
-
-Task:
-1. Determine whether the predicted summary is semantically consistent with the ground truth.
-2. Ensure it does not contradict key facts in the ground truth.
-3. Ensure it is reasonable and faithful to the instruction constraints.
-
-Respond with ONLY ONE WORD:
-- "CORRECT" if all criteria are satisfied
-- "INCORRECT" otherwise
-
-Judgment:"""
-
-    OPENCLAW_OVERVIEW_JUDGE_PROMPT = """You are evaluating an inbox overview paragraph.
-
-Field under evaluation: overview_paragraph
-
-Original instruction for this sample:
-{input_prompt}
-
-Ground Truth Overview:
-{ground_truth_field}
-
-Predicted Overview:
-{predicted_field}
-
-Task:
-1. Determine whether the predicted overview is semantically aligned with the ground truth.
-2. Ensure it does not contradict key details from the ground truth.
-3. Ensure it is reasonable and follows instruction constraints.
-
-Respond with ONLY ONE WORD:
-- "CORRECT" if all criteria are satisfied
-- "INCORRECT" otherwise
-
-Judgment:"""
-
-    OPENCLAW_QUESTION_JUDGE_PROMPT = """You are evaluating a clarification question for an email reply workflow.
-
-Field under evaluation: question
-
-Original instruction for this sample:
-{input_prompt}
-
-Ground Truth Question:
-{ground_truth_field}
-
-Predicted Question:
-{predicted_field}
-
-Task:
-1. Determine whether the predicted question is semantically aligned with the ground truth intent.
-2. Ensure it is reasonable and helpful for unblocking a safe/useful reply.
-3. Ensure it follows the instruction constraints.
-
-Respond with ONLY ONE WORD:
-- "CORRECT" if all criteria are satisfied
-- "INCORRECT" otherwise
-
-Judgment:"""
-
-    OPENCLAW_DRAFT_JUDGE_PROMPT = """You are evaluating a drafted email reply.
-
-Field under evaluation: draft_body
-
-Original instruction for this sample:
-{input_prompt}
-
-Ground Truth Draft:
-{ground_truth_field}
-
-Predicted Draft:
-{predicted_field}
-
-Task:
-1. Check semantic alignment with the ground truth draft (intent and key facts).
-2. Check instruction adherence from the original prompt (style, constraints, requested behavior).
-3. Ensure the draft is reasonable, actionable, and not contradictory or fabricated.
-
-Respond with ONLY ONE WORD:
-- "CORRECT" if all criteria are satisfied
-- "INCORRECT" otherwise
-
-Judgment:"""
-
-    OPENCLAW_AGENT_POLICIES: Dict[str, Dict[str, Any]] = {
-        "summarize_each": {
-            "required_fields": ("summary",),
-            "mode": "semantic_llm",
-            "prompt": OPENCLAW_SUMMARY_JUDGE_PROMPT,
-        },
-        "classify": {
-            "required_fields": ("category",),
-            "mode": "strict_exact",
-        },
-        "overview": {
-            "required_fields": ("overview_paragraph",),
-            "mode": "semantic_llm",
-            "prompt": OPENCLAW_OVERVIEW_JUDGE_PROMPT,
-        },
-        "ask_questions": {
-            "required_fields": ("question",),
-            "mode": "semantic_llm",
-            "prompt": OPENCLAW_QUESTION_JUDGE_PROMPT,
-        },
-        "ask_question": {
-            "required_fields": ("question",),
-            "mode": "semantic_llm",
-            "prompt": OPENCLAW_QUESTION_JUDGE_PROMPT,
-        },
-        "draft_replies": {
-            "required_fields": ("draft_body",),
-            "mode": "semantic_llm",
-            "prompt": OPENCLAW_DRAFT_JUDGE_PROMPT,
-        },
-        "draft_reply": {
-            "required_fields": ("draft_body",),
-            "mode": "semantic_llm",
-            "prompt": OPENCLAW_DRAFT_JUDGE_PROMPT,
-        },
-    }
-    
-    # Task-specific judge prompts for different agent types
-    JUDGE_PROMPTS = {
-        "programmer": """You are evaluating whether a Python code's execution output is correct.
-
-Expected Output (from ground truth):
-{ground_truth}
-
-Actual Execution Output:
-{exec_output}
-
-Task: Compare the actual output with the expected output. Consider numerical equivalence (e.g., 0.0 = 0, 1.5 = 1.50) and ignore minor formatting differences (whitespace, trailing zeros).
-
-Respond with ONLY ONE WORD:
-- "CORRECT" if outputs match
-- "INCORRECT" if outputs differ
-
-Judgment:""",
-        "detailed_solver": MATH_JUDGE_PROMPT,
-        "generate_solver": MATH_JUDGE_PROMPT,
-        "refine_solver": MATH_JUDGE_PROMPT,
-        "answer_generate": HOTPOTQA_JUDGE_PROMPT,
-        "sc_ensemble_math": """You are evaluating an ensemble agent's solution selection for a MATH problem.
-
-Ground Truth Solution:
-{ground_truth_solution}
-
-Predicted Solution:
-{predicted_solution}
-
-Ground Truth Reasoning:
-{ground_truth_output}
-
-Agent's Reasoning:
-{model_output}
-
-Task: 
-1. First, compare the final mathematical answers from both solutions. Are they equivalent?
-2. Then, check if the agent's reasoning process is correct and aligns with the ground truth reasoning.
-
-Respond with ONLY ONE WORD:
-- "CORRECT" if the predicted solution's final answer matches the ground truth solution's final answer AND the reasoning process is correct
-- "INCORRECT" otherwise
-
-Judgment:""",
-        "sc_ensemble_hotpotqa": """You are evaluating an ensemble agent's answer selection for a question answering task.
-
-Question:
-{question}
-
-Ground Truth Answer:
-{ground_truth_solution}
-
-Predicted Answer:
-{predicted_solution}
-
-Ground Truth Reasoning:
-{ground_truth_output}
-
-Agent's Reasoning:
-{model_output}
-
-Task: 
-1. Compare the ground truth answer with the predicted answer. Are they semantically equivalent?
-2. Then, check if the agent's reasoning process is correct and aligns with the ground truth reasoning.
-
-Respond with ONLY ONE WORD:
-- "CORRECT" if the predicted answer matches the ground truth answer semantically AND the reasoning process is correct
-- "INCORRECT" otherwise
-
-Judgment:""",
-        "sc_ensemble_livecodebench": """You are evaluating an ensemble agent's code solution selection for a coding problem.
-
-Problem:
-{problem}
-
-Ground Truth Solution:
-{ground_truth_solution}
-
-Predicted Solution:
-{predicted_solution}
-
-Ground Truth Reasoning:
-{ground_truth_output}
-
-Agent's Reasoning:
-{model_output}
-
-Task: 
-1. First, compare the code solutions. Are they functionally equivalent (same logic and output)?
-2. Then, check if the agent's reasoning process for selecting the solution is correct and aligns with the ground truth reasoning.
-
-Respond with ONLY ONE WORD:
-- "CORRECT" if the predicted solution is functionally equivalent to the ground truth solution AND the reasoning process is correct
-- "INCORRECT" otherwise
-
-Judgment:""",
-    }
+    @classmethod
+    def _openclaw_agent_policies(cls) -> Dict[str, Dict[str, Any]]:
+        configured = getattr(BenchmarkConfig, "OPENCLAW_AGENT_POLICIES", None)
+        return configured or {}
+
+    @classmethod
+    def _workflow_judges(cls) -> Dict[str, Any]:
+        configured = getattr(BenchmarkConfig, "WORKFLOW_JUDGES", None)
+        return configured or {}
     
     def __init__(self, judge_model: str = BenchmarkConfig.JUDGE_MODEL):
         """Initialize with judge model"""
-        self.judge_llm = create_llm_instance(judge_model)
+        self.judge_llm = create_llm_instance(judge_model, endpoint_role="profile")
         self.livecodebench_test_cache = {}  # Cache for LiveCodeBench test cases
         self._load_livecodebench_test_cache()
 
@@ -642,9 +438,8 @@ Judgment:""",
             import traceback
             traceback.print_exc()
 
-    def _get_prompt_template(self, agent_name: str) -> str:
-        """Get the appropriate prompt template for the given agent"""
-        return self.JUDGE_PROMPTS[agent_name]
+    def _get_workflow_judge(self, agent_name: str):
+        return self._workflow_judges().get(agent_name)
 
     @staticmethod
     def _log_failure(agent_name: str, reason_code: str, detail: str = "") -> None:
@@ -679,8 +474,8 @@ Judgment:""",
         agent_name: str,
         model_output: Any,
         ground_truth: Any,
-    ) -> Optional[Tuple[Dict[str, Any], Dict[str, Any], str]]:
-        policy = self.OPENCLAW_AGENT_POLICIES.get(agent_name)
+    ) -> Optional[Tuple[Dict[str, Any], Dict[str, Any], List[str]]]:
+        policy = self._openclaw_agent_policies().get(agent_name)
         if not policy:
             return None
 
@@ -698,28 +493,27 @@ Judgment:""",
         if not required_fields:
             self._log_failure(agent_name, "missing_required_field", "no required field policy configured")
             return None
-        field_name = required_fields[0]
-
         for payload_name, payload in (("model_output", predicted_payload), ("ground_truth", ground_truth_payload)):
-            if field_name not in payload:
-                self._log_failure(
-                    agent_name,
-                    "missing_required_field",
-                    f"{payload_name} missing field '{field_name}'",
-                )
-                return None
-            value = payload.get(field_name)
-            if not isinstance(value, str) or not value.strip():
-                self._log_failure(
-                    agent_name,
-                    "missing_required_field",
-                    f"{payload_name}.{field_name} must be a non-empty string",
-                )
-                return None
+            for field_name in required_fields:
+                if field_name not in payload:
+                    self._log_failure(
+                        agent_name,
+                        "missing_required_field",
+                        f"{payload_name} missing field '{field_name}'",
+                    )
+                    return None
+                value = payload.get(field_name)
+                if not isinstance(value, str) or not value.strip():
+                    self._log_failure(
+                        agent_name,
+                        "missing_required_field",
+                        f"{payload_name}.{field_name} must be a non-empty string",
+                    )
+                    return None
 
-        return predicted_payload, ground_truth_payload, field_name
+        return predicted_payload, ground_truth_payload, required_fields
     
-    def _normalize_answer(self, s: str) -> str:
+    def normalize_answer(self, s: str) -> str:
         """Normalize answer for F1 calculation (from HotpotQA benchmark)"""
         def remove_articles(text):
             return re.sub(r"\b(a|an|the)\b", " ", text)
@@ -737,7 +531,7 @@ Judgment:""",
         return white_space_fix(remove_articles(remove_punc(lower(s))))
 
     @staticmethod
-    def _extract_boxed_choice_letter(text: str) -> Optional[str]:
+    def extract_boxed_choice_letter(text: str) -> Optional[str]:
         """Extract ensemble choice letter from text like '\\boxed{A}'."""
         if not text:
             return None
@@ -815,8 +609,8 @@ Judgment:""",
     
     def calculate_f1_score(self, ground_truth: str, prediction: str) -> float:
         """Calculate F1 score between ground truth and prediction (from HotpotQA benchmark)"""
-        prediction_tokens = self._normalize_answer(prediction).split()
-        ground_truth_tokens = self._normalize_answer(ground_truth).split()
+        prediction_tokens = self.normalize_answer(prediction).split()
+        ground_truth_tokens = self.normalize_answer(ground_truth).split()
         common = Counter(prediction_tokens) & Counter(ground_truth_tokens)
         num_same = sum(common.values())
         if num_same == 0:
@@ -836,7 +630,7 @@ Judgment:""",
         is_correct = f1_score
         return is_correct, f1_score
 
-    def _extract_code_from_output(self, output: str) -> Optional[str]:
+    def extract_code_from_output(self, output: str) -> Optional[str]:
         """
         Extract Python code from output string.
         Handles both markdown code blocks and plain code.
@@ -863,234 +657,36 @@ Judgment:""",
         
         return None
     
-    async def evaluate(
+    async def execute_code_in_subprocess(
         self,
-        ground_truth: str,
-        model_output: str,
-        agent_name: str,
-        problem: str = None,
-        solutions: list = None,
-        question: str = None,
-        workflow_type: str = None,
-        input_prompt: str = None,
-        original_sample: Dict = None,
-    ) -> bool:
-        """
-        Evaluate if model output matches ground truth.
+        code: str,
+        timeout_seconds: float = 5.0,
+    ) -> Tuple[Optional[str], str]:
+        try:
+            from multiprocessing import Process, Queue
 
-        Args:
-            ground_truth: The expected/ground truth output
-            model_output: The output from the model to evaluate
-            agent_name: The name of the agent (for task-specific evaluation)
-            problem: The original problem statement (for sc_ensemble or HotpotQA)
-            solutions: List of candidate solutions (for sc_ensemble)
-            question: The question being answered (for HotpotQA agents)
-            workflow_type: The workflow type (e.g., 'math', 'hotpotqa') for sc_ensemble
-            original_sample: Original sample data (for private test evaluation)
+            result_queue = Queue()
+            process = Process(target=_run_code_in_subprocess, args=(code, result_queue))
+            process.start()
+            process.join(timeout=timeout_seconds)
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=1.0)
+                if process.is_alive():
+                    process.kill()
+                    process.join()
+                return None, f"Code execution timed out after {timeout_seconds} seconds"
+            if result_queue.empty():
+                return None, "Code execution failed: no result returned"
+            result_type, status, output = result_queue.get()
+            if result_type == "error":
+                return None, f"Code execution error: {status[:200]}"
+            return status, output
+        except Exception as exc:
+            return None, f"Code execution error: {str(exc)[:200]}"
 
-        Returns:
-            True if correct, False otherwise
-        """
-        assert agent_name != "format_answer", "Use evaluate_with_f1 for format_answer agent"
-        if not model_output or not model_output.strip():
-            self._log_failure(agent_name, "missing_required_field", "model_output is empty")
-            return False
-
-        if agent_name in ["code_generate", "reflection_test"] and workflow_type == "livecodebench":
-            try:
-                model_code = self._extract_code_from_output(model_output)
-                if model_code is None:
-                    model_code = model_output
-                if not model_code or not model_code.strip():
-                    print(f"Warning: Empty code output for {agent_name}")
-                    return False
-                if original_sample is None:
-                    print(f"Warning: No original_sample provided for private test evaluation of {agent_name}")
-                    return False
-                return await self.evaluate_code_with_private_tests(model_code, original_sample)
-            except Exception as e:
-                print(f"Error in code evaluation for {agent_name}: {e}")
-                traceback.print_exc()
-                return False
-
-        prompt: Optional[str] = None
-
-        if agent_name == "programmer":
-            try:
-                model_code = self._extract_code_from_output(model_output)
-                if not model_code:
-                    print("Warning: Could not extract code from model output")
-                    return False
-                try:
-                    from multiprocessing import Process, Queue
-
-                    result_queue = Queue()
-                    process = Process(target=_run_code_in_subprocess, args=(model_code, result_queue))
-                    process.start()
-                    process.join(timeout=5.0)
-                    if process.is_alive():
-                        process.terminate()
-                        process.join(timeout=1.0)
-                        if process.is_alive():
-                            process.kill()
-                            process.join()
-                        print("Code execution timed out after 5 seconds")
-                        return False
-                    if not result_queue.empty():
-                        result_type, status, output = result_queue.get()
-                        if result_type == "error":
-                            print(f"Code execution error: {status[:200]}")
-                            return False
-                    else:
-                        print("Code execution failed: no result returned")
-                        return False
-                except Exception as e:
-                    print(f"Code execution error: {str(e)[:200]}")
-                    return False
-
-                if status != "Success":
-                    print(f"Code execution failed: {output[:200]}")
-                    return False
-                prompt_template = self._get_prompt_template(agent_name)
-                prompt = prompt_template.format(
-                    ground_truth=ground_truth,
-                    exec_status=status,
-                    exec_output=output,
-                )
-            except Exception as e:
-                print(f"Error in programmer evaluation: {e}")
-                traceback.print_exc()
-                return False
-        else:
-            openclaw_policy = self.OPENCLAW_AGENT_POLICIES.get(agent_name)
-            if openclaw_policy:
-                validated = self._validate_openclaw_payloads(agent_name, model_output, ground_truth)
-                if validated is None:
-                    return False
-                predicted_payload, ground_truth_payload, field_name = validated
-                mode = str(openclaw_policy.get("mode") or "").strip().lower()
-                predicted_value = str(predicted_payload[field_name]).strip()
-                ground_truth_value = str(ground_truth_payload[field_name]).strip()
-                if mode == "strict_exact":
-                    pred_norm = self._normalize_exact_value(predicted_value)
-                    gt_norm = self._normalize_exact_value(ground_truth_value)
-                    if pred_norm != gt_norm:
-                        self._log_failure(
-                            agent_name,
-                            "strict_mismatch",
-                            f"field={field_name}, predicted='{pred_norm}', expected='{gt_norm}'",
-                        )
-                        return False
-                    return True
-                if mode != "semantic_llm":
-                    self._log_failure(agent_name, "judge_error", f"unsupported OpenClaw mode '{mode}'")
-                    return False
-                prompt_template = str(openclaw_policy.get("prompt") or "").strip()
-                if not prompt_template:
-                    self._log_failure(agent_name, "judge_error", "missing semantic judge prompt")
-                    return False
-                prompt = prompt_template.format(
-                    input_prompt=input_prompt or "N/A",
-                    ground_truth_field=ground_truth_value,
-                    predicted_field=predicted_value,
-                )
-            else:
-                prompt_template = self._get_prompt_template(agent_name)
-                if agent_name == "answer_generate":
-                    formatter = XmlFormatter.from_model(AnswerGenerateOp)
-                    is_valid_format, parsed_data = formatter.validate_response(model_output)
-                    if not is_valid_format or not parsed_data:
-                        return False
-                    if "answer" not in parsed_data or not parsed_data["answer"].strip():
-                        return False
-                    model_answer = parsed_data["answer"].strip()
-                    ground_truth_answer = ground_truth.strip()
-                    if question is None and problem:
-                        if "Question:" in problem:
-                            question = problem.split("Question:")[-1].split("Answer:")[0].strip()
-                        else:
-                            question = problem
-                    prompt = prompt_template.format(
-                        ground_truth=ground_truth_answer,
-                        model_output=model_answer,
-                        question=question or "N/A",
-                    )
-                elif agent_name.startswith("sc_ensemble"):
-                    formatter = XmlFormatter.from_model(ScEnsembleOp)
-                    predicted_solution_letter = self._extract_boxed_choice_letter(model_output)
-                    if not predicted_solution_letter:
-                        return False
-
-                    ground_truth_solution_letter = None
-                    try:
-                        _ok, ground_truth_parsed_data = formatter.validate_response(ground_truth)
-                        if isinstance(ground_truth_parsed_data, dict):
-                            candidate = ground_truth_parsed_data.get("solution_letter", "")
-                            if isinstance(candidate, str) and candidate.strip():
-                                ground_truth_solution_letter = candidate.strip().upper()
-                    except Exception:
-                        ground_truth_solution_letter = None
-                    if not ground_truth_solution_letter:
-                        ground_truth_solution_letter = self._extract_boxed_choice_letter(ground_truth)
-                    if not ground_truth_solution_letter:
-                        return False
-
-                    if not isinstance(solutions, list) or len(solutions) == 0:
-                        return predicted_solution_letter == ground_truth_solution_letter
-
-                    gt_idx = ord(ground_truth_solution_letter) - ord("A")
-                    pred_idx = ord(predicted_solution_letter) - ord("A")
-                    if gt_idx < 0 or pred_idx < 0 or gt_idx >= len(solutions) or pred_idx >= len(solutions):
-                        return predicted_solution_letter == ground_truth_solution_letter
-
-                    ground_truth_solution = solutions[gt_idx]
-                    try:
-                        predicted_solution = solutions[pred_idx]
-                    except Exception:
-                        return predicted_solution_letter == ground_truth_solution_letter
-
-                    if workflow_type is None:
-                        workflow_type = BenchmarkConfig.WORKFLOW_TYPE
-                    is_hotpotqa = workflow_type == "hotpotqa"
-                    is_livecodebench = workflow_type == "livecodebench"
-                    if is_hotpotqa:
-                        if question is None and problem:
-                            if "Question:" in problem:
-                                question = problem.split("Question:")[-1].split("Answer:")[0].strip()
-                            else:
-                                question = problem
-                        prompt_template = self.JUDGE_PROMPTS["sc_ensemble_hotpotqa"]
-                        prompt = prompt_template.format(
-                            question=question or "N/A",
-                            ground_truth_solution=ground_truth_solution,
-                            predicted_solution=predicted_solution,
-                            model_output=model_output,
-                            ground_truth_output=ground_truth,
-                        )
-                    elif is_livecodebench:
-                        prompt_template = self.JUDGE_PROMPTS["sc_ensemble_livecodebench"]
-                        prompt = prompt_template.format(
-                            problem=problem or "N/A",
-                            ground_truth_solution=ground_truth_solution,
-                            predicted_solution=predicted_solution,
-                            model_output=model_output,
-                            ground_truth_output=ground_truth,
-                        )
-                    else:
-                        prompt_template = self.JUDGE_PROMPTS["sc_ensemble_math"]
-                        prompt = prompt_template.format(
-                            ground_truth_solution=ground_truth_solution,
-                            predicted_solution=predicted_solution,
-                            model_output=model_output,
-                            ground_truth_output=ground_truth,
-                        )
-                else:
-                    prompt = prompt_template.format(
-                        ground_truth=ground_truth,
-                        model_output=model_output,
-                    )
-
-        if not prompt:
+    async def judge_with_prompt(self, agent_name: str, prompt: str) -> bool:
+        if not prompt or not str(prompt).strip():
             self._log_failure(agent_name, "judge_error", "empty judge prompt")
             return False
 
@@ -1121,6 +717,182 @@ Judgment:""",
             self._log_failure(agent_name, "judge_error", str(e))
             print(f"Error in judge evaluation for {agent_name}: {e}")
             return False
+
+    def build_context(
+        self,
+        ground_truth: str,
+        model_output: str,
+        agent_name: str,
+        sample_data: Optional[Dict[str, Any]] = None,
+        problem: Optional[str] = None,
+        solutions: Optional[List[Any]] = None,
+        question: Optional[str] = None,
+        workflow_type: Optional[str] = None,
+        input_prompt: Optional[str] = None,
+        original_sample: Optional[Dict[str, Any]] = None,
+    ) -> JudgeContext:
+        derived_problem = problem
+        derived_solutions = solutions
+        derived_question = question
+        derived_original_sample = original_sample
+        if isinstance(sample_data, dict):
+            agent_input = sample_data.get("agent_input")
+            if isinstance(agent_input, dict):
+                if derived_problem is None:
+                    candidate_problem = agent_input.get("problem")
+                    if isinstance(candidate_problem, str):
+                        derived_problem = candidate_problem
+                if derived_solutions is None:
+                    candidate_solutions = agent_input.get("solutions")
+                    if isinstance(candidate_solutions, list):
+                        derived_solutions = candidate_solutions
+                if derived_question is None:
+                    candidate_question = agent_input.get("problem")
+                    if isinstance(candidate_question, str) and candidate_question.strip():
+                        derived_question = candidate_question
+            if derived_problem is None:
+                candidate_problem = sample_data.get("problem")
+                if isinstance(candidate_problem, str):
+                    derived_problem = candidate_problem
+            if derived_question is None:
+                candidate_question = sample_data.get("problem")
+                if isinstance(candidate_question, str) and candidate_question.strip():
+                    derived_question = candidate_question
+            if derived_original_sample is None:
+                candidate_original_sample = sample_data.get("original_sample")
+                if isinstance(candidate_original_sample, dict):
+                    derived_original_sample = candidate_original_sample
+
+        return JudgeContext(
+            agent_name=agent_name,
+            ground_truth=ground_truth,
+            model_output=model_output,
+            input_prompt=input_prompt,
+            workflow_type=workflow_type or BenchmarkConfig.WORKFLOW_TYPE,
+            sample_data=sample_data,
+            problem=derived_problem,
+            solutions=derived_solutions,
+            question=derived_question,
+            original_sample=derived_original_sample,
+        )
+
+    async def _evaluate_openclaw_context(self, context: JudgeContext) -> JudgeResult:
+        validated = self._validate_openclaw_payloads(
+            context.agent_name,
+            context.model_output,
+            context.ground_truth,
+        )
+        if validated is None:
+            return JudgeResult(is_correct=False)
+
+        predicted_payload, ground_truth_payload, required_fields = validated
+        mode = str(self._openclaw_agent_policies()[context.agent_name].get("mode") or "").strip().lower()
+        field_name = required_fields[0]
+        if mode == "strict_exact":
+            mismatches = []
+            for required_field in required_fields:
+                pred_norm = self._normalize_exact_value(predicted_payload[required_field])
+                gt_norm = self._normalize_exact_value(ground_truth_payload[required_field])
+                if pred_norm != gt_norm:
+                    mismatches.append(
+                        f"{required_field}: predicted='{pred_norm}', expected='{gt_norm}'"
+                    )
+            if mismatches:
+                self._log_failure(
+                    context.agent_name,
+                    "strict_mismatch",
+                    "; ".join(mismatches),
+                )
+                return JudgeResult(is_correct=False)
+            return JudgeResult(is_correct=True)
+        if mode != "semantic_llm":
+            self._log_failure(
+                context.agent_name,
+                "judge_error",
+                f"unsupported OpenClaw mode '{mode}'",
+            )
+            return JudgeResult(is_correct=False)
+
+        prompt_template = str(
+            self._openclaw_agent_policies()[context.agent_name].get("prompt") or ""
+        ).strip()
+        if not prompt_template:
+            self._log_failure(context.agent_name, "judge_error", "missing semantic judge prompt")
+            return JudgeResult(is_correct=False)
+
+        if len(required_fields) == 1:
+            predicted_value = str(predicted_payload[field_name]).strip()
+            ground_truth_value = str(ground_truth_payload[field_name]).strip()
+        else:
+            predicted_value = json.dumps(
+                {field: predicted_payload[field] for field in required_fields},
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            ground_truth_value = json.dumps(
+                {field: ground_truth_payload[field] for field in required_fields},
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        prompt = prompt_template.format(
+            input_prompt=context.input_prompt or "N/A",
+            required_fields=", ".join(required_fields),
+            ground_truth_field=ground_truth_value,
+            predicted_field=predicted_value,
+            ground_truth_json=ground_truth_value,
+            predicted_json=predicted_value,
+        )
+        return JudgeResult(
+            is_correct=await self.judge_with_prompt(context.agent_name, prompt)
+        )
+
+    async def evaluate_context(self, context: JudgeContext) -> JudgeResult:
+        if not context.model_output or not context.model_output.strip():
+            self._log_failure(context.agent_name, "missing_required_field", "model_output is empty")
+            return JudgeResult(is_correct=False)
+
+        if context.agent_name in self._openclaw_agent_policies():
+            return await self._evaluate_openclaw_context(context)
+
+        workflow_judge = self._get_workflow_judge(context.agent_name)
+        if workflow_judge is None:
+            self._log_failure(context.agent_name, "judge_error", "missing workflow judge")
+            return JudgeResult(is_correct=False)
+        try:
+            return await workflow_judge(self, context)
+        except Exception as exc:
+            self._log_failure(context.agent_name, "judge_error", str(exc))
+            print(f"Error in judge evaluation for {context.agent_name}: {exc}")
+            traceback.print_exc()
+            return JudgeResult(is_correct=False)
+
+    async def evaluate(
+        self,
+        ground_truth: str,
+        model_output: str,
+        agent_name: str,
+        problem: str = None,
+        solutions: list = None,
+        question: str = None,
+        workflow_type: str = None,
+        input_prompt: str = None,
+        original_sample: Dict = None,
+        sample_data: Optional[Dict[str, Any]] = None,
+    ) -> Any:
+        context = self.build_context(
+            ground_truth=ground_truth,
+            model_output=model_output,
+            agent_name=agent_name,
+            sample_data=sample_data,
+            problem=problem,
+            solutions=solutions,
+            question=question,
+            workflow_type=workflow_type,
+            input_prompt=input_prompt,
+            original_sample=original_sample,
+        )
+        result = await self.evaluate_context(context)
+        return result.is_correct
 
 
 
@@ -1153,7 +925,7 @@ class AgentBenchmarker:
     def _get_llm(self, model_name: str) -> AsyncLLM:
         """Get or create LLM instance (with caching)"""
         if model_name not in self.llm_cache:
-            self.llm_cache[model_name] = create_llm_instance(model_name)
+            self.llm_cache[model_name] = create_llm_instance(model_name, endpoint_role="profile")
         return self.llm_cache[model_name]
     
     def _get_thinking_budgets(self, model_name: str) -> List[Any]:
@@ -1187,94 +959,24 @@ class AgentBenchmarker:
         llm = self._get_llm(model_name)
 
         try:
-            # NOTE: already handled in operators.py
-            # if self.agent_name == "sc_ensemble":
-            #     input_prompt = ensemble_prompt_surgery(input_prompt)
-            # Call with thinking budget
             output, input_tokens, output_tokens = await llm.call_with_thinking_budget(input_prompt, thinking_budget, return_io_tokens=True)
-
-            # Evaluate correctness with agent-specific evaluation
-            # For format_answer, use F1 metric
-            if self.agent_name == "format_answer" and sample_data:
-                is_correct, f1_score = await self.judge.evaluate_with_f1(
-                    ground_truth, output, 
-                    agent_name=self.agent_name
-                )
-                return {
-                    "output": output,
-                    "input_tokens": input_tokens,
-                    "output_tokens": output_tokens,
-                    "is_correct": is_correct,
-                    "f1_score": f1_score,  # Store F1 score separately
-                    "error": False,
-                }
-            # For sc_ensemble, pass additional context and use configured workflow type
-            elif self.agent_name == "sc_ensemble" and sample_data:
-                problem = sample_data.get("agent_input", {}).get("problem", None)
-                solutions = sample_data.get("agent_input", {}).get("solutions", None)
-                
-                # Use configured workflow type
-                workflow_type = BenchmarkConfig.WORKFLOW_TYPE
-                
-                # Determine the specific agent name variant based on workflow type
-                agent_name_variant = f"sc_ensemble_{workflow_type}"
-                
-                # Extract question for HotpotQA
-                question = None
-                if workflow_type == "hotpotqa":
-                    full_problem = sample_data.get("problem", "")
-                    if "Question:" in full_problem:
-                        question = full_problem.split("Question:")[-1].split("Answer:")[0].strip()
-                    else:
-                        question = problem
-                
-                # Get original_sample for private test evaluation
-                original_sample = sample_data.get("original_sample", None)
-                
-                is_correct = await self.judge.evaluate(
-                    ground_truth, output, 
-                    agent_name=agent_name_variant,
-                    problem=problem,
-                    solutions=solutions,
-                    question=question,
-                    workflow_type=workflow_type,
-                    input_prompt=input_prompt,
-                    original_sample=original_sample
-                )
-            # For HotpotQA agents, pass question context
-            elif self.agent_name == "answer_generate" and sample_data:
-                problem = sample_data.get("problem", "")
-                agent_input = sample_data.get("agent_input", {})
-                question = agent_input.get("problem", problem) if isinstance(agent_input, dict) else problem
-                original_sample = sample_data.get("original_sample", None)
-                
-                is_correct = await self.judge.evaluate(
-                    ground_truth, output, 
-                    agent_name=self.agent_name,
-                    problem=problem,
-                    question=question,
-                    input_prompt=input_prompt,
-                    original_sample=original_sample
-                )
-            else:
-                # Get original_sample and workflow_type for all other agents
-                original_sample = sample_data.get("original_sample", None) if sample_data else None
-                workflow_type = BenchmarkConfig.WORKFLOW_TYPE
-                
-                is_correct = await self.judge.evaluate(
-                    ground_truth, output, 
-                    agent_name=self.agent_name,
-                    workflow_type=workflow_type,
-                    input_prompt=input_prompt,
-                    original_sample=original_sample
-                )
+            context = self.judge.build_context(
+                ground_truth=ground_truth,
+                model_output=output,
+                agent_name=self.agent_name,
+                workflow_type=BenchmarkConfig.WORKFLOW_TYPE,
+                input_prompt=input_prompt,
+                sample_data=sample_data,
+            )
+            judge_result = await self.judge.evaluate_context(context)
 
             return {
                 "output": output,
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
-                "is_correct": is_correct,
-                "f1_score": None,  # Only format_answer has F1 score
+                "is_correct": judge_result.is_correct,
+                "metric_name": judge_result.metric_name,
+                "metric_value": judge_result.metric_value,
                 "error": False,
             }
         except Exception as e:
@@ -1284,7 +986,8 @@ class AgentBenchmarker:
                 "input_tokens": 0,
                 "output_tokens": 0,
                 "is_correct": False,
-                "f1_score": None,
+                "metric_name": None,
+                "metric_value": None,
                 "error": True,
             }
 
@@ -1549,12 +1252,22 @@ class BenchmarkRunner:
                     accuracy = sum(r["is_correct"] for r in repetition_results) / n_reps if n_reps > 0 else 0
                     avg_input_tokens = sum(r["input_tokens"] for r in repetition_results) / n_reps if n_reps > 0 else 0
                     avg_output_tokens = sum(r["output_tokens"] for r in repetition_results) / n_reps if n_reps > 0 else 0
-                    
-                    # For format_answer, also compute average F1 score
-                    avg_f1_score = None
-                    if agent_name == "format_answer":
-                        f1_scores = [r.get("f1_score", 0.0) for r in repetition_results if r.get("f1_score") is not None]
-                        avg_f1_score = sum(f1_scores) / len(f1_scores) if f1_scores else 0.0
+
+                    metric_names = {
+                        r.get("metric_name")
+                        for r in repetition_results
+                        if r.get("metric_name")
+                    }
+                    metric_name = metric_names.pop() if len(metric_names) == 1 else None
+                    avg_metric_value = None
+                    if metric_name:
+                        metric_values = [
+                            r.get("metric_value", 0.0)
+                            for r in repetition_results
+                            if r.get("metric_name") == metric_name and r.get("metric_value") is not None
+                        ]
+                        if metric_values:
+                            avg_metric_value = sum(metric_values) / len(metric_values)
                     
                     result_entry = {
                         "agent_name": agent_name,
@@ -1570,8 +1283,10 @@ class BenchmarkRunner:
                         "all_runs": repetition_results
                     }
                     
-                    if avg_f1_score is not None:
-                        result_entry["avg_f1_score"] = avg_f1_score
+                    if metric_name:
+                        result_entry["metric_name"] = metric_name
+                    if avg_metric_value is not None and metric_name:
+                        result_entry[f"avg_{metric_name}"] = avg_metric_value
                     
                     config_results.append(result_entry)
                 
@@ -1612,13 +1327,19 @@ class BenchmarkRunner:
                     "accuracy_percent": f"{overall_accuracy * 100:.2f}%"
                 }
                 
-                # For format_answer, add average F1 score
-                if agent_name == "format_answer":
-                    f1_scores = [r.get("avg_f1_score", 0.0) for r in config_results if "avg_f1_score" in r]
-                    if f1_scores:
-                        overall_f1 = sum(f1_scores) / len(f1_scores)
-                        summary_entry["overall_f1_score"] = overall_f1
-                        summary_entry["f1_score_percent"] = f"{overall_f1 * 100:.2f}%"
+                metric_names = {
+                    r.get("metric_name")
+                    for r in config_results
+                    if r.get("metric_name")
+                }
+                metric_name = metric_names.pop() if len(metric_names) == 1 else None
+                if metric_name:
+                    metric_key = f"avg_{metric_name}"
+                    metric_values = [r.get(metric_key, 0.0) for r in config_results if metric_key in r]
+                    if metric_values:
+                        overall_metric = sum(metric_values) / len(metric_values)
+                        summary_entry[f"overall_{metric_name}"] = overall_metric
+                        summary_entry[f"{metric_name}_percent"] = f"{overall_metric * 100:.2f}%"
                 
                 summary[agent_name][config_key] = summary_entry
         
@@ -1709,6 +1430,8 @@ async def run_profiling(
     workflow_type: Optional[str] = None,
     training_data_path: Optional[str] = None,
     openclaw_lobster_workflow_file: Optional[str] = None,
+    openclaw_agent_policies: Optional[Dict[str, Any]] = None,
+    judge_policies: Optional[Any] = None,
 ) -> Path:
     """Run reasoning-budget profiling for an experiment."""
     BenchmarkConfig.initialize_from_experiment_id(
@@ -1717,6 +1440,8 @@ async def run_profiling(
         workflow_type=workflow_type,
         training_data_path=training_data_path,
         openclaw_lobster_workflow_file=openclaw_lobster_workflow_file,
+        openclaw_agent_policies=openclaw_agent_policies,
+        judge_policies=judge_policies,
     )
 
     if models:

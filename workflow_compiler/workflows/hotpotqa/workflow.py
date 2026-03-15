@@ -5,6 +5,7 @@ from typing import Any, Dict
 
 from workflow_compiler.dsl.torchlike import WorkflowModule, AgentNode
 from workflow_compiler.core.workflow import prompts as prompt_custom
+from workflow_compiler.workflows.hotpotqa.judges import get_profiling_judges
 
 
 class HotpotQAWorkflowDSL(WorkflowModule):
@@ -30,6 +31,9 @@ class HotpotQAWorkflowDSL(WorkflowModule):
             "full_solution": final,
             "final_solution": final,
         }
+
+    def get_profiling_judges(self):
+        return get_profiling_judges()
 
 
 __all__ = [
