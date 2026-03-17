@@ -32,7 +32,10 @@ setup(
     long_description_content_type="text/markdown",
     packages=find_packages(include=["workflow_compiler", "workflow_compiler.*"]),
     include_package_data=True,
-    package_data={"workflow_compiler.dsl": ["schema.json"]},
+    package_data={
+        "workflow_compiler.dsl": ["schema.json"],
+        "workflow_compiler.benchmarks": ["long_text.txt"],
+    },
     python_requires=">=3.8",
     install_requires=read_requirements(requirements_file),
     entry_points={

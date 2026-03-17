@@ -47,6 +47,7 @@ Rules:
 - `get-latency` uses `endpoints.local_base_url`.
 - `profile` uses `endpoints.profile_base_url` for both sub-agent calls and judge calls.
 - If any `openclaw_agent_policies[*].judge.mode` is `semantic_llm`, `model_config.models` must include `gpt-oss-120b`. FlowCompile profiling uses that alias as the default semantic judge model.
+- For `workflow_type: "openclaw_lobster"`, every profiled LLM step must expose a statically discoverable output schema under the workflow bundle's `prompts/` directory. FlowCompile validates payloads against those workflow-owned schemas before judging.
 - Keep model aliases and `hf_model_name` mappings under `models`.
 - Do not repeat endpoint URLs under every model entry in new configs.
 - FlowCompile resolves `model_config` to an in-memory mapping after loading the flat config, even if the author wrote it as a path.
@@ -77,6 +78,10 @@ Useful optional keys:
 - `predict_subagent_score_thresholds`
 - `profile_min_samples_per_agent`
 - `profile_max_concurrent`
+
+Recommended default:
+
+- Set `profile_min_samples_per_agent: 20` for OpenClaw profiling unless you are intentionally running a smaller smoke test.
 
 ## judge_policies
 
@@ -132,6 +137,7 @@ openclaw_agent_policies:
 Rules:
 
 - Derive `required_fields` from the captured JSON outputs in `demo_analysis.json`.
+- Every `required_fields` entry must exist in the profiled step's resolved workflow schema; FlowCompile rejects unknown schema properties.
 - Use `strict_exact` when the output is an exact categorical/string field and the right answer should match exactly after normalization.
 - Use `semantic_llm` for summaries, free-form text, or multi-constraint outputs.
 - `strict_exact` does not require an LLM judge call. Any `semantic_llm` OpenClaw judge requires `gpt-oss-120b` to be present in `model_config.models`.
@@ -150,6 +156,8 @@ Before finalizing the YAML:
 
 - Read `<bundle-dir>/flowcompile/demo_analysis.json`.
 - Derive `required_fields` directly from the agent analysis.
+- Confirm the workflow bundle exposes statically discoverable `prompts/*.schema.json` files for every profiled OpenClaw step.
+- Set `profile_min_samples_per_agent: 20` unless the human explicitly wants a smaller or larger profiling floor.
 - Confirm `workflow_loops` counts with the human instead of blindly copying observed counts.
 - Include `gpt-oss-120b` in `model_config.models` whenever any OpenClaw semantic judge is present.
 

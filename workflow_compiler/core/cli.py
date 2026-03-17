@@ -1044,7 +1044,7 @@ def cmd_compile_latency(args, cfg):
     if not models or not output_json:
         raise SystemExit("models and output_json are required for latency benchmarking")
 
-    prompt_file = _arg_get(args, "prompt_file") or _cfg_flat_get(cfg, "latency_prompt_file") or lat.get("prompt_file", "data/prompts/long_text.txt")
+    prompt_file = _arg_get(args, "prompt_file") or _cfg_flat_get(cfg, "latency_prompt_file") or lat.get("prompt_file")
     batch_size_arg = _arg_get(args, "batch_size")
     batch_size = batch_size_arg if batch_size_arg is not None else _cfg_flat_get(cfg, "latency_batch_size", lat.get("batch_size", 1))
     batch_sizes_arg = _arg_get(args, "batch_sizes")

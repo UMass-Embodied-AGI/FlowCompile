@@ -42,6 +42,9 @@ _EXPORTS = {
     "get_benchmark_class": (".registry", "get_benchmark_class"),
     "get_benchmark_info": (".registry", "get_benchmark_info"),
     "list_benchmarks": (".registry", "list_benchmarks"),
+    "DEFAULT_LATENCY_PROMPT_SOURCE": (".prompts", "DEFAULT_LATENCY_PROMPT_SOURCE"),
+    "DEFAULT_LATENCY_PROMPT_TEXT": (".prompts", "DEFAULT_LATENCY_PROMPT_TEXT"),
+    "get_default_latency_prompt_text": (".prompts", "get_default_latency_prompt_text"),
 }
 
 
@@ -71,4 +74,7 @@ __all__ = [
     "get_benchmark_class",
     "get_benchmark_info",
     "list_benchmarks",
+    "DEFAULT_LATENCY_PROMPT_SOURCE",
+    "DEFAULT_LATENCY_PROMPT_TEXT",
+    "get_default_latency_prompt_text",
 ]

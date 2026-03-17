@@ -5,10 +5,11 @@ import json
 import os
 import shutil
 import subprocess
-import textwrap
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+import yaml
 
 from workflow_compiler.core.llm.config import load_model_config_payload
 from workflow_compiler.workflows.openclaw_lobster.parser import parse_lobster_workflow
@@ -85,7 +86,11 @@ def normalize_openclaw_agent_policies(raw: Any) -> Dict[str, Dict[str, Any]]:
             raise ValueError(f"openclaw_agent_policies[{agent_name!r}] must be a mapping")
 
         raw_required = raw_policy.get("required_fields")
-        if not isinstance(raw_required, list) or not raw_required:
+        if (
+            not isinstance(raw_required, Sequence)
+            or isinstance(raw_required, (str, bytes))
+            or not raw_required
+        ):
             raise ValueError(
                 f"openclaw_agent_policies[{agent_name!r}].required_fields must be a non-empty list"
             )
@@ -141,6 +146,88 @@ def normalize_openclaw_agent_policies(raw: Any) -> Dict[str, Dict[str, Any]]:
 
 def _requires_semantic_judge_model(policies: Dict[str, Dict[str, Any]]) -> bool:
     return any(str(policy.get("mode") or "").strip().lower() == "semantic_llm" for policy in policies.values())
+
+
+def _read_object_schema(schema_path: Path) -> Dict[str, Any]:
+    try:
+        payload = json.loads(schema_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON schema at {schema_path}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"Schema must decode to an object: {schema_path}")
+    if str(payload.get("type") or "").strip().lower() != "object":
+        raise ValueError(f"Schema must declare root type 'object': {schema_path}")
+    properties = payload.get("properties")
+    if not isinstance(properties, dict):
+        raise ValueError(f"Schema must define an object 'properties' mapping: {schema_path}")
+    return payload
+
+
+def _openclaw_agent_schema_entries(spec: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    entries: Dict[str, Dict[str, Any]] = {}
+    for node in spec.get("nodes") or []:
+        if not isinstance(node, dict) or node.get("type") != "agent":
+            continue
+        agent_name = str(node.get("id") or "").strip()
+        if not agent_name:
+            continue
+        metadata = node.get("metadata") or {}
+        schema_path_raw = str(metadata.get("output_schema_path") or "").strip()
+        if not schema_path_raw:
+            raise ValueError(
+                f"OpenClaw workflow agent {agent_name!r} is missing a statically discoverable output schema path"
+            )
+        schema_path = Path(schema_path_raw).expanduser().resolve()
+        schema = _read_object_schema(schema_path)
+        entries[agent_name] = {
+            "path": schema_path,
+            "schema": schema,
+        }
+    return entries
+
+
+def load_openclaw_agent_schemas(spec: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """Return resolved OpenClaw agent schemas keyed by agent id."""
+    return _openclaw_agent_schema_entries(spec)
+
+
+def _schema_property_types(schema: Dict[str, Any]) -> Dict[str, List[str]]:
+    summary: Dict[str, List[str]] = {}
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        return summary
+    for field_name, field_schema in properties.items():
+        if not isinstance(field_schema, dict):
+            continue
+        raw_type = field_schema.get("type")
+        if isinstance(raw_type, list):
+            types = [str(item) for item in raw_type if str(item).strip()]
+        elif isinstance(raw_type, str) and raw_type.strip():
+            types = [raw_type]
+        else:
+            types = []
+        summary[str(field_name)] = types
+    return summary
+
+
+def validate_openclaw_policy_fields_against_schemas(
+    policies: Dict[str, Dict[str, Any]],
+    schema_entries: Dict[str, Dict[str, Any]],
+) -> None:
+    for agent_name, policy in policies.items():
+        entry = schema_entries.get(agent_name)
+        if entry is None:
+            raise ValueError(f"OpenClaw workflow agent {agent_name!r} is missing resolved schema metadata")
+        properties = entry["schema"].get("properties") or {}
+        unknown_fields = [
+            field_name for field_name in policy.get("required_fields") or ()
+            if field_name not in properties
+        ]
+        if unknown_fields:
+            raise ValueError(
+                f"openclaw_agent_policies[{agent_name!r}].required_fields contains unknown schema "
+                f"properties {unknown_fields}; schema={entry['path']}"
+            )
 
 
 def _resolve_workflow_dir(workflow_dir: str) -> Path:
@@ -211,136 +298,56 @@ def _prepare_manifest(workflow_dir: str, *, model_config: Optional[str] = None) 
     return manifest_path, manifest
 
 
-def _build_node_shim(shim_path: Path, capture_path: Path, real_node_bin: str) -> None:
-    shim_path.parent.mkdir(parents=True, exist_ok=True)
-    capture_path.parent.mkdir(parents=True, exist_ok=True)
-    shim_code = textwrap.dedent(
-        """\
-        #!/usr/bin/env python3
-        import json
-        import os
-        import subprocess
-        import sys
-        from datetime import datetime
-
-        def _opt(argv, name):
-            try:
-                i = argv.index(name)
-            except ValueError:
-                return None
-            if i + 1 >= len(argv):
-                return None
-            return argv[i + 1]
-
-        def _append_jsonl(path, payload):
-            line = (json.dumps(payload, ensure_ascii=False) + "\\n").encode("utf-8")
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
-            try:
-                os.write(fd, line)
-            finally:
-                os.close(fd)
-
-        def main():
-            argv = sys.argv[1:]
-            real_node = os.environ.get("FLOWCOMPILE_REAL_NODE_BIN", "")
-            capture_file = os.environ.get("FLOWCOMPILE_OPENCLAW_CAPTURE_FILE", "")
-            step_id = os.environ.get("FLOWCOMPILE_OPENCLAW_STEP_ID", "")
-
-            if not real_node:
-                print("FLOWCOMPILE_REAL_NODE_BIN is required", file=sys.stderr)
-                return 127
-            if not argv:
-                os.execv(real_node, [real_node])
-
-            target = os.path.basename(argv[0])
-            intercept = (
-                target == "openclaw_invoke.js"
-                and _opt(argv, "--tool") == "llm-task"
-                and _opt(argv, "--action") == "json"
-            )
-            if not intercept:
-                os.execv(real_node, [real_node, *argv])
-
-            stdin_bytes = None
-            if "--args-stdin" in argv:
-                stdin_bytes = sys.stdin.buffer.read()
-
-            proc = subprocess.run(
-                [real_node, *argv],
-                input=stdin_bytes,
-                capture_output=True,
-            )
-            stdout_text = proc.stdout.decode("utf-8", errors="replace")
-            stderr_text = proc.stderr.decode("utf-8", errors="replace")
-
-            request_args = None
-            args_file = _opt(argv, "--args-file")
-            inline_args = _opt(argv, "--args-json")
-            try:
-                if args_file:
-                    with open(args_file, "r", encoding="utf-8") as f:
-                        request_args = json.load(f)
-                elif "--args-stdin" in argv and stdin_bytes is not None:
-                    request_args = json.loads(stdin_bytes.decode("utf-8", errors="replace"))
-                elif inline_args is not None:
-                    request_args = json.loads(inline_args)
-            except Exception:
-                request_args = None
-
-            response_json = None
-            details_json = None
-            try:
-                response_json = json.loads(stdout_text)
-                details_json = ((response_json.get("result") or {}).get("details", {}).get("json"))
-            except Exception:
-                response_json = None
-                details_json = None
-
-            if capture_file:
-                rec = {
-                    "timestamp": datetime.now().astimezone().isoformat(),
-                    "argv": argv,
-                    "exit_code": proc.returncode,
-                    "step_id": step_id,
-                    "request_args": request_args,
-                    "response_stdout": stdout_text,
-                    "response_stderr": stderr_text,
-                    "response_json": response_json,
-                    "details_json": details_json,
-                }
-                try:
-                    _append_jsonl(capture_file, rec)
-                except Exception as exc:
-                    print(f"Failed to write capture log: {exc}", file=sys.stderr)
-
-            sys.stdout.buffer.write(proc.stdout)
-            sys.stderr.buffer.write(proc.stderr)
-            return proc.returncode
-
-        if __name__ == "__main__":
-            raise SystemExit(main())
-        """
+def _prefixed_command(command: Any, *, step_id: str) -> Any:
+    if not isinstance(command, str) or not command.strip():
+        return command
+    return (
+        f"export FLOWCOMPILE_OPENCLAW_STEP_ID={json.dumps(step_id)}\n"
+        f"{command}"
     )
-    shim_path.write_text(shim_code, encoding="utf-8")
-    shim_path.chmod(0o755)
 
 
 def _build_runtime_env(session_path: Path, capture_path: Path, env_overrides: Dict[str, str]) -> Dict[str, str]:
-    real_node = shutil.which("node")
-    if not real_node:
-        raise FileNotFoundError("`node` not found in PATH")
     if not shutil.which("lobster"):
         raise FileNotFoundError("`lobster` not found in PATH")
 
-    shim_path = session_path.parent / "bin" / "node"
-    _build_node_shim(shim_path, capture_path, real_node)
-
     env = os.environ.copy()
-    env["PATH"] = f"{shim_path.parent}{os.pathsep}{env.get('PATH', '')}"
-    env["FLOWCOMPILE_REAL_NODE_BIN"] = real_node
     env["FLOWCOMPILE_OPENCLAW_CAPTURE_FILE"] = str(capture_path)
     env.update(env_overrides)
     return env
+
+
+def _build_instrumented_workflow(workflow_file: Path, session_path: Path) -> Path:
+    spec = parse_lobster_workflow(str(workflow_file))
+    llm_step_ids = {
+        str(node.get("id"))
+        for node in (spec.get("nodes") or [])
+        if node.get("type") == "agent" and node.get("id")
+    }
+    payload = yaml.safe_load(workflow_file.read_text(encoding="utf-8")) or {}
+    steps = payload.get("steps")
+    if not isinstance(steps, list):
+        raise ValueError(f"Invalid Lobster workflow (missing steps): {workflow_file}")
+
+    instrumented_steps: List[Dict[str, Any]] = []
+    for step in steps:
+        if not isinstance(step, dict):
+            instrumented_steps.append(step)
+            continue
+        step_copy = dict(step)
+        step_id = str(step.get("id") or "").strip()
+        if step_id in llm_step_ids:
+            step_copy["command"] = _prefixed_command(step.get("command"), step_id=step_id)
+        instrumented_steps.append(step_copy)
+
+    payload["steps"] = instrumented_steps
+    instrumented_path = session_path.parent / "instrumented_workflow.lobster.yaml"
+    instrumented_path.parent.mkdir(parents=True, exist_ok=True)
+    instrumented_path.write_text(
+        yaml.safe_dump(payload, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    return instrumented_path
 
 
 def _run_lobster_payload(cmd: Sequence[str], cwd: Path, env: Dict[str, str]) -> Dict[str, Any]:
@@ -412,24 +419,6 @@ def _canonical_json_text(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-def _infer_agent_name_from_schema(schema: Dict[str, Any]) -> str:
-    required = schema.get("required") if isinstance(schema, dict) else []
-    if not isinstance(required, list):
-        required = []
-    required_set = {str(item) for item in required}
-    if required_set == {"category"}:
-        return "classify"
-    if required_set == {"summary"}:
-        return "summarize_each"
-    if required_set == {"overview_paragraph"}:
-        return "overview"
-    if required_set == {"question"}:
-        return "ask_questions"
-    if required_set == {"draft_body"}:
-        return "draft_replies"
-    return "unknown"
-
-
 def _build_training_data(records: List[Dict[str, Any]], run_label: str) -> List[Dict[str, Any]]:
     samples: List[Dict[str, Any]] = []
     step_number = 0
@@ -438,9 +427,10 @@ def _build_training_data(records: List[Dict[str, Any]], run_label: str) -> List[
         details_json = record.get("details_json")
         if not isinstance(req, dict) or details_json is None:
             continue
-        schema = req.get("schema", {})
         step_number += 1
-        agent_name = str(record.get("step_id") or "").strip() or _infer_agent_name_from_schema(schema if isinstance(schema, dict) else {})
+        agent_name = str(record.get("step_id") or "").strip()
+        if not agent_name:
+            continue
         raw_out = _canonical_json_text(details_json)
         samples.append(
             {
@@ -502,6 +492,7 @@ def demo_run_openclaw(
     env_overrides = _normalize_env_json(env_json)
     env = _build_runtime_env(session_path, capture_path, env_overrides)
     normalized_args_json = _normalize_args_json(args_json)
+    instrumented_workflow = _build_instrumented_workflow(Path(manifest["workflow_file"]), session_path)
     payload = _run_lobster_payload(
         [
             "lobster",
@@ -509,7 +500,7 @@ def demo_run_openclaw(
             "--mode",
             "tool",
             "--file",
-            manifest["workflow_file"],
+            str(instrumented_workflow),
             "--args-json",
             normalized_args_json,
         ],
@@ -523,6 +514,7 @@ def demo_run_openclaw(
         "manifest_path": str(Path(manifest_path).resolve()),
         "workflow_dir": manifest["workflow_dir"],
         "workflow_file": manifest["workflow_file"],
+        "instrumented_workflow_file": str(instrumented_workflow),
         "capture_path": str(capture_path),
         "status": payload.get("status") or "unknown",
         "args_json": json.loads(normalized_args_json),
@@ -776,10 +768,12 @@ def analyze_openclaw_demo(workflow_dir: str) -> Path:
 
     counts_by_agent = {agent_name: len(samples) for agent_name, samples in grouped.items()}
     spec = parse_lobster_workflow(manifest["workflow_file"])
+    schema_entries = load_openclaw_agent_schemas(spec)
     _reject_incomplete_demo(spec, counts_by_agent)
     agents: Dict[str, Dict[str, Any]] = {}
     for agent_name, samples in sorted(grouped.items()):
         required_fields, observed_fields, field_types = _extract_required_fields(samples)
+        schema_entry = schema_entries.get(agent_name)
         examples = []
         for sample in samples[:3]:
             examples.append(
@@ -794,6 +788,8 @@ def analyze_openclaw_demo(workflow_dir: str) -> Path:
             "required_fields_intersection": required_fields,
             "observed_fields_union": observed_fields,
             "observed_field_types": field_types,
+            "resolved_schema_path": str(schema_entry["path"]) if schema_entry else "",
+            "schema_property_types": _schema_property_types(schema_entry["schema"]) if schema_entry else {},
             "examples": examples,
         }
 
@@ -1027,6 +1023,7 @@ def validate_openclaw_config_payload(cfg: Dict[str, Any], *, config_path: Option
             )
 
     spec = parse_lobster_workflow(str(workflow_path))
+    schema_entries = load_openclaw_agent_schemas(spec)
     agent_ids = [str(node.get("id")) for node in (spec.get("nodes") or []) if node.get("type") == "agent" and node.get("id")]
     missing = sorted(set(agent_ids) - set(normalized_policies.keys()))
     unknown = sorted(set(normalized_policies.keys()) - set(agent_ids))
@@ -1034,6 +1031,7 @@ def validate_openclaw_config_payload(cfg: Dict[str, Any], *, config_path: Option
         raise ValueError(f"openclaw_agent_policies is missing workflow agents: {missing}")
     if unknown:
         raise ValueError(f"openclaw_agent_policies contains unknown workflow agents: {unknown}")
+    validate_openclaw_policy_fields_against_schemas(normalized_policies, schema_entries)
 
     _validate_workflow_loops_against_spec(spec, cfg.get("workflow_loops"))
     _validate_thresholds(cfg.get("predict_subagent_score_thresholds"), agent_ids)
@@ -1041,6 +1039,7 @@ def validate_openclaw_config_payload(cfg: Dict[str, Any], *, config_path: Option
     summary = {
         "workflow_agents": agent_ids,
         "normalized_policies": normalized_policies,
+        "agent_schema_paths": {agent_name: str(entry["path"]) for agent_name, entry in schema_entries.items()},
         "config_path": config_path,
     }
     return summary
@@ -1055,4 +1054,6 @@ __all__ = [
     "analyze_openclaw_demo",
     "infer_candidate_workflow_loops",
     "validate_openclaw_config_payload",
+    "load_openclaw_agent_schemas",
+    "validate_openclaw_policy_fields_against_schemas",
 ]

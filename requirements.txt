@@ -11,3 +11,4 @@ seaborn
 tenacity
 tree-sitter
 tree-sitter-python
+jsonschema

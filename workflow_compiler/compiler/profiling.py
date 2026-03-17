@@ -53,6 +53,8 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Tuple, Optional, Any
 from collections import defaultdict, Counter
+from jsonschema import ValidationError
+from jsonschema.validators import validator_for
 from tqdm.asyncio import tqdm
 
 from workflow_compiler.compiler.judge_types import JudgeContext, JudgeResult
@@ -62,7 +64,11 @@ from workflow_compiler.benchmarks.livecodebench import evaluate_generations_by_p
 from workflow_compiler.core.data_paths import resolve_existing_path
 from concurrent.futures import ProcessPoolExecutor
 from workflow_compiler.workflows.dsl_registry import get_workflow_module
-from workflow_compiler.integration.openclaw import normalize_openclaw_agent_policies
+from workflow_compiler.integration.openclaw import (
+    load_openclaw_agent_schemas,
+    normalize_openclaw_agent_policies,
+    validate_openclaw_policy_fields_against_schemas,
+)
 
 GLOBAL_DEFAULT_SEARCH_BUDGETS = (10, 200, 400, 800, 1000, 1500, 2000, 3000, 4000, 5000)
 VALID_JUDGE_POLICY_MODES = {"semantic_llm"}
@@ -98,6 +104,19 @@ def normalize_judge_policies(raw: Any) -> Dict[str, Dict[str, Any]]:
             "prompt": prompt,
         }
     return normalized
+
+
+def _build_jsonschema_validator(schema: Dict[str, Any]):
+    validator_cls = validator_for(schema)
+    validator_cls.check_schema(schema)
+    return validator_cls(schema)
+
+
+def _format_validation_error(exc: ValidationError) -> str:
+    path = ".".join(str(part) for part in exc.absolute_path)
+    if path:
+        return f"{path}: {exc.message}"
+    return exc.message
 
 
 def _run_code_in_subprocess(code: str, result_queue) -> None:
@@ -207,6 +226,13 @@ def get_experiment_config(
     )
     inferred_agents = workflow_module.infer_profiling_agents()
     selected_search_budgets = list(search_budgets) if search_budgets else list(GLOBAL_DEFAULT_SEARCH_BUDGETS)
+    openclaw_agent_schemas: Dict[str, Dict[str, Any]] = {}
+    if resolved_workflow_type == "openclaw_lobster":
+        openclaw_agent_schemas = load_openclaw_agent_schemas(workflow_module.compile())
+        validate_openclaw_policy_fields_against_schemas(
+            normalize_openclaw_agent_policies(openclaw_agent_policies),
+            openclaw_agent_schemas,
+        )
 
     return {
         "training_data_path": training_data_file,
@@ -218,6 +244,7 @@ def get_experiment_config(
         "workflow_judges": workflow_module.get_profiling_judges(),
         "openclaw_lobster_workflow_file": openclaw_lobster_workflow_file,
         "openclaw_agent_policies": normalize_openclaw_agent_policies(openclaw_agent_policies),
+        "openclaw_agent_schemas": openclaw_agent_schemas,
     }
 
 
@@ -267,6 +294,7 @@ class BenchmarkConfig:
     WORKFLOW_JUDGES = None
     OPENCLAW_LOBSTER_WORKFLOW_FILE = None
     OPENCLAW_AGENT_POLICIES = None
+    OPENCLAW_AGENT_SCHEMAS = None
     LIVECODEBENCH_VALIDATE_PATH = "data/livecodebench_validate.jsonl"
     LIVECODEBENCH_PUBLIC_TEST_PATH = "data/livecodebench_public_test.jsonl"
     
@@ -307,6 +335,7 @@ class BenchmarkConfig:
         cls.WORKFLOW_JUDGES = config.get("workflow_judges") or {}
         cls.OPENCLAW_LOBSTER_WORKFLOW_FILE = config.get("openclaw_lobster_workflow_file")
         cls.OPENCLAW_AGENT_POLICIES = config.get("openclaw_agent_policies") or None
+        cls.OPENCLAW_AGENT_SCHEMAS = config.get("openclaw_agent_schemas") or None
         if judge_policies and cls.WORKFLOW_TYPE != "openclaw_lobster":
             print(
                 "Warning: judge_policies are ignored for built-in workflows; "
@@ -336,11 +365,20 @@ class JudgeEvaluator:
     def _workflow_judges(cls) -> Dict[str, Any]:
         configured = getattr(BenchmarkConfig, "WORKFLOW_JUDGES", None)
         return configured or {}
+
+    @classmethod
+    def _openclaw_agent_schemas(cls) -> Dict[str, Dict[str, Any]]:
+        configured = getattr(BenchmarkConfig, "OPENCLAW_AGENT_SCHEMAS", None)
+        return configured or {}
     
     def __init__(self, judge_model: str = BenchmarkConfig.JUDGE_MODEL):
         """Initialize with judge model"""
         self.judge_llm = create_llm_instance(judge_model, endpoint_role="profile")
         self.livecodebench_test_cache = {}  # Cache for LiveCodeBench test cases
+        self._openclaw_schema_validators = {
+            agent_name: _build_jsonschema_validator(schema_entry["schema"])
+            for agent_name, schema_entry in self._openclaw_agent_schemas().items()
+        }
         self._load_livecodebench_test_cache()
 
     async def aclose(self):
@@ -468,9 +506,18 @@ class JudgeEvaluator:
             return None
         return payload
 
-    @staticmethod
-    def _normalize_exact_value(value: str) -> str:
-        return str(value).strip().lower()
+    @classmethod
+    def _normalize_exact_value(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return value.strip().lower()
+        if isinstance(value, list):
+            return [cls._normalize_exact_value(item) for item in value]
+        if isinstance(value, dict):
+            return {
+                str(key): cls._normalize_exact_value(item)
+                for key, item in sorted(value.items(), key=lambda item: str(item[0]))
+            }
+        return value
 
     def _validate_openclaw_payloads(
         self,
@@ -480,6 +527,14 @@ class JudgeEvaluator:
     ) -> Optional[Tuple[Dict[str, Any], Dict[str, Any], List[str]]]:
         policy = self._openclaw_agent_policies().get(agent_name)
         if not policy:
+            return None
+        schema_entry = self._openclaw_agent_schemas().get(agent_name)
+        if not isinstance(schema_entry, dict):
+            self._log_failure(agent_name, "schema_validation", "missing resolved output schema")
+            return None
+        validator = self._openclaw_schema_validators.get(agent_name)
+        if validator is None:
+            self._log_failure(agent_name, "schema_validation", "missing compiled schema validator")
             return None
 
         predicted_payload = self._parse_json_object(model_output)
@@ -492,6 +547,17 @@ class JudgeEvaluator:
             self._log_failure(agent_name, "invalid_json", "ground_truth must be a JSON object")
             return None
 
+        for payload_name, payload in (("model_output", predicted_payload), ("ground_truth", ground_truth_payload)):
+            try:
+                validator.validate(payload)
+            except ValidationError as exc:
+                self._log_failure(
+                    agent_name,
+                    "schema_validation",
+                    f"{payload_name} failed schema validation ({schema_entry['path']}): {_format_validation_error(exc)}",
+                )
+                return None
+
         required_fields = list(policy.get("required_fields") or [])
         if not required_fields:
             self._log_failure(agent_name, "missing_required_field", "no required field policy configured")
@@ -503,14 +569,6 @@ class JudgeEvaluator:
                         agent_name,
                         "missing_required_field",
                         f"{payload_name} missing field '{field_name}'",
-                    )
-                    return None
-                value = payload.get(field_name)
-                if not isinstance(value, str) or not value.strip():
-                    self._log_failure(
-                        agent_name,
-                        "missing_required_field",
-                        f"{payload_name}.{field_name} must be a non-empty string",
                     )
                     return None
 
@@ -798,7 +856,8 @@ class JudgeEvaluator:
                 gt_norm = self._normalize_exact_value(ground_truth_payload[required_field])
                 if pred_norm != gt_norm:
                     mismatches.append(
-                        f"{required_field}: predicted='{pred_norm}', expected='{gt_norm}'"
+                        f"{required_field}: predicted={json.dumps(pred_norm, ensure_ascii=False, sort_keys=True)}, "
+                        f"expected={json.dumps(gt_norm, ensure_ascii=False, sort_keys=True)}"
                     )
             if mismatches:
                 self._log_failure(
@@ -824,8 +883,14 @@ class JudgeEvaluator:
             return JudgeResult(is_correct=False)
 
         if len(required_fields) == 1:
-            predicted_value = str(predicted_payload[field_name]).strip()
-            ground_truth_value = str(ground_truth_payload[field_name]).strip()
+            predicted_raw = predicted_payload[field_name]
+            ground_truth_raw = ground_truth_payload[field_name]
+            if isinstance(predicted_raw, str) and isinstance(ground_truth_raw, str):
+                predicted_value = predicted_raw.strip()
+                ground_truth_value = ground_truth_raw.strip()
+            else:
+                predicted_value = json.dumps(predicted_raw, ensure_ascii=False, sort_keys=True)
+                ground_truth_value = json.dumps(ground_truth_raw, ensure_ascii=False, sort_keys=True)
         else:
             predicted_value = json.dumps(
                 {field: predicted_payload[field] for field in required_fields},

@@ -9,6 +9,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
+from workflow_compiler.benchmarks.prompts import (
+    DEFAULT_LATENCY_PROMPT_SOURCE,
+    get_default_latency_prompt_text,
+)
 from workflow_compiler.core.terminal import get_reporter
 from workflow_compiler.core.llm.config import load_model_config_payload
 
@@ -586,6 +590,13 @@ def _save_latency_json(output_json: str, payload: Dict[str, Any]) -> None:
         json.dump(merged_payload, f, indent=2)
 
 
+def _load_latency_prompt(prompt_file: Optional[str]) -> Tuple[str, str]:
+    if prompt_file:
+        prompt_path = Path(prompt_file)
+        return prompt_path.read_text(encoding="utf-8").strip(), str(prompt_path)
+    return get_default_latency_prompt_text().strip(), DEFAULT_LATENCY_PROMPT_SOURCE
+
+
 def _run_latency_benchmark_vllm(
     models_list: List[str],
     prompt: str,
@@ -737,7 +748,7 @@ def _run_latency_benchmark_openai(
 def run_latency_benchmark(
     models: Union[str, Sequence[str]],
     output_json: str,
-    prompt_file: str = "data/prompts/long_text.txt",
+    prompt_file: Optional[str] = None,
     batch_size: int = 1,
     batch_sizes: Optional[Union[str, Sequence[int]]] = None,
     max_new_tokens: int = 1024,
@@ -749,10 +760,9 @@ def run_latency_benchmark(
     backend: str = "auto",
     vllm_engine_args: Optional[Dict[str, Any]] = None,
 ) -> dict:
-    with open(prompt_file, "r", encoding="utf-8") as f:
-        prompt = f.read().strip()
+    prompt, prompt_source = _load_latency_prompt(prompt_file)
     if not prompt:
-        raise ValueError(f"{prompt_file} is empty.")
+        raise ValueError(f"{prompt_source} is empty.")
 
     models_list = _normalize_models(models)
     if not models_list:
@@ -772,7 +782,7 @@ def run_latency_benchmark(
         return _run_latency_benchmark_openai(
             models_list=models_list,
             prompt=prompt,
-            prompt_file=prompt_file,
+            prompt_file=prompt_source,
             output_json=output_json,
             batch_sizes_list=batch_sizes_list,
             max_new_tokens=max_new_tokens,
@@ -788,7 +798,7 @@ def run_latency_benchmark(
         return _run_latency_benchmark_openai(
             models_list=models_list,
             prompt=prompt,
-            prompt_file=prompt_file,
+            prompt_file=prompt_source,
             output_json=output_json,
             batch_sizes_list=batch_sizes_list,
             max_new_tokens=max_new_tokens,
@@ -800,7 +810,7 @@ def run_latency_benchmark(
         return _run_latency_benchmark_vllm(
             models_list=models_list,
             prompt=prompt,
-            prompt_file=prompt_file,
+            prompt_file=prompt_source,
             output_json=output_json,
             batch_sizes_list=batch_sizes_list,
             max_new_tokens=max_new_tokens,
@@ -819,7 +829,7 @@ def run_latency_benchmark(
             return _run_latency_benchmark_openai(
                 models_list=models_list,
                 prompt=prompt,
-                prompt_file=prompt_file,
+                prompt_file=prompt_source,
                 output_json=output_json,
                 batch_sizes_list=batch_sizes_list,
                 max_new_tokens=max_new_tokens,
