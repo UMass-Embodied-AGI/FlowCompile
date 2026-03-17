@@ -73,3 +73,55 @@ def test_structure_lock_validation():
     assert len(filtered) == 1
     assert filtered[0]["structure_id"] == "s__programmer-c1__refine_solver-c1__detailed_solver-c1__generate_solver-c2__sc_ensemble-c1"
     assert info["resolved_structure"] == "s__programmer-c1__refine_solver-c1__detailed_solver-c1__generate_solver-c2__sc_ensemble-c1"
+
+
+def test_single_branch_multi_node_kept_by_default():
+    """A single-branch structure with 2+ nodes should survive default filtering."""
+    structures = [
+        {
+            "structure_id": "full",
+            "active_node_ids": ["select_efficiency", "summarize_pdfs"],
+            "total_branches": 1,
+        },
+    ]
+    spec = SearchSpaceSpec()
+    filtered, info = apply_structure_constraints(structures, spec)
+    assert len(filtered) == 1
+    assert filtered[0]["structure_id"] == "full"
+    assert info.get("exclude_single_node_default") is True
+
+
+def test_single_node_dropped_when_multi_node_exists():
+    """A single-node structure should be dropped when multi-node structures exist."""
+    structures = [
+        {
+            "structure_id": "full",
+            "active_node_ids": ["a", "b"],
+            "total_branches": 2,
+        },
+        {
+            "structure_id": "pruned",
+            "active_node_ids": ["a"],
+            "total_branches": 1,
+        },
+    ]
+    spec = SearchSpaceSpec()
+    filtered, info = apply_structure_constraints(structures, spec)
+    assert len(filtered) == 1
+    assert filtered[0]["structure_id"] == "full"
+
+
+def test_single_node_only_workflow_not_filtered():
+    """When ALL structures have <=1 node, none should be dropped."""
+    structures = [
+        {
+            "structure_id": "only_one",
+            "active_node_ids": ["a"],
+            "total_branches": 1,
+        },
+    ]
+    spec = SearchSpaceSpec()
+    filtered, info = apply_structure_constraints(structures, spec)
+    assert len(filtered) == 1
+    assert filtered[0]["structure_id"] == "only_one"
+

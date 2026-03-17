@@ -211,22 +211,27 @@ def apply_structure_constraints(
     structures: List[Dict[str, Any]],
     spec: SearchSpaceSpec,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    def _is_multi_branch(structure: Dict[str, Any]) -> bool:
-        branches = structure.get("total_branches")
-        if branches is None:
-            return True
-        try:
-            return int(branches) >= 2
-        except (TypeError, ValueError):
-            return True
+    def _node_count(structure: Dict[str, Any]) -> int:
+        ids = structure.get("active_node_ids")
+        if isinstance(ids, list):
+            return len(ids)
+        counts = structure.get("active_agent_counts")
+        if isinstance(counts, dict):
+            return sum(max(0, int(v)) for v in counts.values())
+        return 0
 
     filtered = structures
     if spec.structures is not None:
         filtered = [s for s in structures if s.get("structure_id") in spec.structures]
     else:
-        # Default policy: ignore single-branch workflows unless caller explicitly
-        # requests structure IDs via search_space.structures.
-        filtered = [s for s in filtered if _is_multi_branch(s)]
+        # Default policy: drop single-node structures (trivially degenerate).
+        # Exception: if the workflow only has single-node structures
+        # (i.e. it is a genuinely single-agent workflow), keep them all.
+        max_nodes = max((_node_count(s) for s in structures), default=0)
+        if max_nodes >= 2:
+            filtered = [s for s in structures if _node_count(s) >= 2]
+        else:
+            filtered = list(structures)
 
     if not filtered:
         raise ValueError("Structure filtering removed all workflow structures.")
@@ -240,7 +245,7 @@ def apply_structure_constraints(
 
     info: Dict[str, Any] = {
         "structure_count": len(filtered),
-        "exclude_single_branch_default": spec.structures is None,
+        "exclude_single_node_default": spec.structures is None,
     }
     if "structure" not in spec.search_axes:
         info["resolved_structure"] = filtered[0].get("structure_id")
