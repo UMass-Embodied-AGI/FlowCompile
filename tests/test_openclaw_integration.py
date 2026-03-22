@@ -464,8 +464,8 @@ def test_run_json_batch_capture_records_round_trip(monkeypatch, tmp_path: Path):
 
     async def fake_run_batch(**_: object) -> list[dict[str, object]]:
         return [
-            {"id": "e1", "result": {"summary": "s1"}, "error": ""},
-            {"id": "e2", "result": None, "error": "boom"},
+            {"id": "e1", "result": {"summary": "s1"}, "error": "", "input_tokens": 150, "output_tokens": 42},
+            {"id": "e2", "result": None, "error": "boom", "input_tokens": 0, "output_tokens": 0},
         ]
 
     monkeypatch.setattr(workflow_llm, "_run_batch", fake_run_batch)
@@ -489,11 +489,18 @@ def test_run_json_batch_capture_records_round_trip(monkeypatch, tmp_path: Path):
     assert records[0]["step_id"] == "summarize_each"
     assert records[0]["request_args"]["input"] == {"email": {"id": "e1"}}
     assert records[0]["details_json"] == {"summary": "s1"}
+    assert records[0]["input_tokens"] == 150
+    assert records[0]["output_tokens"] == 42
     assert records[1]["error"] == "boom"
+    assert records[1]["input_tokens"] == 0
+    assert records[1]["output_tokens"] == 0
 
     training = openclaw._build_training_data(records, run_label="demo")
     assert [sample["agent_name"] for sample in training] == ["summarize_each"]
     assert training[0]["processed_output"] == '{"summary":"s1"}'
+    assert training[0]["input_tokens"] == 150
+    assert training[0]["output_tokens"] == 42
+
 
 
 def test_demo_run_openclaw_creates_bundle_local_artifacts(monkeypatch, tmp_path: Path):
