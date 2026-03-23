@@ -30,7 +30,13 @@ setup(
     description="FlowCompile: Pareto-optimal agentic workflow compilation",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    packages=find_packages(include=["workflow_compiler", "workflow_compiler.*"]),
+    packages=(
+        find_packages(include=["workflow_compiler", "workflow_compiler.*"])
+        + find_packages(where="3rdparty/flashflow", include=["flashflow", "flashflow.*"])
+    ),
+    package_dir={
+        "flashflow": "3rdparty/flashflow/flashflow",
+    },
     include_package_data=True,
     package_data={
         "workflow_compiler.dsl": ["schema.json"],
@@ -41,6 +47,7 @@ setup(
     entry_points={
         "console_scripts": [
             "flowcompile=workflow_compiler.core.cli:main",
+            "flashflow=flashflow.cli:main",
         ]
     },
     classifiers=[

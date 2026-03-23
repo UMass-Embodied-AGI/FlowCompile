@@ -25,6 +25,7 @@ from workflow_compiler.compiler.validation import run_validation
 from workflow_compiler.routers import get_router
 from workflow_compiler.routers.utils import consolidate_validation_data
 from workflow_compiler.runtime.infer import infer_runtime, infer_runtime_batch
+from workflow_compiler.runtime.export import export_flashflow_dag, write_flashflow_dag
 from workflow_compiler.runtime.selector import (
     RUNTIME_PREFERENCE_BUDGET_PRESETS as _RUNTIME_PREFERENCE_BUDGET_PRESETS,
 )
@@ -1717,6 +1718,72 @@ def cmd_runtime_infer(args, cfg):
     )
     return 0
 
+
+def cmd_export(args, cfg):
+    reporter = get_reporter().child("export")
+    started = time.perf_counter()
+    experiment_id = _experiment_id_from_cfg(cfg)
+    root = _exp_root(experiment_id, cfg=cfg) if experiment_id else None
+    compiled = args.compiled
+    if compiled is None and root is not None:
+        compiled = _resolve_required_input_path(
+            "compiled",
+            explicit_value=None,
+            canonical_path=str(root / "02_compile" / "compiled_configs.json"),
+            detect_patterns=[str(root / "compiled" / "compiled_configs.json")],
+        )
+    if not compiled:
+        raise SystemExit("--compiled is required unless compile.experiment_id is set.")
+    if not args.config_id and not args.budget_preset:
+        raise SystemExit("flowcompile export requires either --config-id or --budget-preset.")
+
+    compiled_payload = _load_compiled_payload(compiled)
+    workflow_type = (
+        args.workflow_type
+        or compiled_payload.get("workflow_type")
+        or _cfg_flat_get(cfg, "workflow_type")
+        or _cfg_get(cfg, "compile", "workflow_type")
+    )
+    if not workflow_type:
+        raise SystemExit("workflow_type is required for export.")
+
+    output_file = args.output_file
+    if output_file is None:
+        if root is None:
+            raise SystemExit("--output-file is required unless compile.experiment_id is set.")
+        output_file = str(root / "03_export" / "workflow_dag.json")
+
+    try:
+        exported_dag, summary = export_flashflow_dag(
+            compiled_payload=compiled_payload,
+            workflow_type=workflow_type,
+            config_id=args.config_id,
+            budget_preset=args.budget_preset,
+            openclaw_lobster_workflow_file=(
+                args.openclaw_lobster_workflow_file
+                or _cfg_flat_get(cfg, "openclaw_lobster_workflow_file")
+                or (compiled_payload.get("metadata") or {}).get("openclaw_lobster_workflow_file")
+            ),
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+
+    write_flashflow_dag(Path(output_file), exported_dag)
+    _emit_command_summary(
+        "Export",
+        f"Workflow type: {summary.get('workflow_type')}",
+        f"Config id: {summary.get('config_id')}",
+        (
+            f"Budget preset: {summary.get('selected_budget_preset')}"
+            if summary.get("selected_budget_preset")
+            else None
+        ),
+        f"Structure id: {summary.get('structure_id')}" if summary.get("structure_id") else None,
+        f"Exported DAG: {output_file}",
+        f"Elapsed: {_format_elapsed(time.perf_counter() - started)}",
+    )
+    return 0
+
 def cmd_experiments(args, cfg):
     reporter = get_reporter().child("experiments")
     started = time.perf_counter()
@@ -1958,6 +2025,14 @@ def main(argv: Optional[List[str]] = None):
     pred.add_argument("--no-prune-subagents", dest="prune_subagents", action="store_false")
     _add_search_space_args(pred)
 
+    exp_dag = subparsers.add_parser("export")
+    exp_dag.add_argument("--compiled")
+    exp_dag.add_argument("--config-id")
+    exp_dag.add_argument("--budget-preset", choices=sorted(_RUNTIME_PREFERENCE_BUDGET_PRESETS.keys()))
+    exp_dag.add_argument("--output-file")
+    exp_dag.add_argument("--workflow-type")
+    exp_dag.add_argument("--openclaw-lobster-workflow-file")
+
     subparsers.add_parser("run-all")
 
     # test
@@ -2064,6 +2139,8 @@ def main(argv: Optional[List[str]] = None):
             return cmd_compile_profile(args, cfg)
         if args.command == "predict":
             return cmd_compile_predict(args, cfg)
+        if args.command == "export":
+            return cmd_export(args, cfg)
         if args.command == "run-all":
             return cmd_compile_all(args, cfg)
 
