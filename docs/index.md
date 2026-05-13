@@ -1,22 +1,39 @@
 # FlowCompile Documentation
 
-FlowCompile is an agentic LLM workflow compiler that computes an accuracy-latency Pareto frontier at compile time and uses it to pick practical runtime configurations later.
+FlowCompile is an optimizing compiler for structured LLM workflows. Given a
+workflow graph, validation/profile data, and a design space over model choices,
+reasoning budgets, and workflow structures, it compiles a reusable set of
+workflow-level configurations that span the accuracy-latency Pareto frontier.
 
-This site is the project documentation home for setup, configuration, CLI usage, extension guides, and a curated API reference.
+The implementation follows the paper pipeline closely:
+
+1. Collect workflow traces with a high-capacity reference model.
+2. Induce and filter sub-agent training examples from those traces.
+3. Profile each sub-agent across the configured model and reasoning-budget space.
+4. Compose sub-agent profiles through a structure-aware proxy.
+5. Emit `flowcompile.compiled.v2` runtime configurations for validation,
+   deployment-time selection, or optional routing.
 
 ## Core Capabilities
 
 - Compile Pareto-optimal workflow configurations before deployment.
-- Define workflows in a Python DSL with explicit structure and reusable agents.
-- Run the same project through a single `flowcompile` CLI for benchmarking, profiling, compilation, validation, and runtime inference.
-- Extend the system with new benchmarks and workflows without rebuilding the whole documentation stack.
+- Search model assignment, reasoning budget, and inferred workflow-structure
+  choices with one flat experiment config.
+- Define workflows in a Python DSL with reusable `AgentNode` and `ToolNode`
+  components.
+- Run latency benchmarking, data preparation, profiling, prediction, testing,
+  runtime inference, and correlation analysis from the `flowcompile` CLI.
+- Reuse compiled configurations with preference-based, constraint-based, or
+  KNN-router selection at runtime.
 
 ## Start Here
 
-- New to the project: begin with the installation and quickstart guides.
-- Integrating the CLI into experiments: use the CLI guide and project structure overview.
+- New to the project: begin with installation, configuration, and quickstart.
+- Reproducing the paper workflow: read the compiler pipeline and benchmark
+  workflow guides.
+- Integrating experiments: use the CLI guide and project structure overview.
 - Extending the codebase: read the benchmark and workflow extension guides.
-- Looking for internals: use the curated API reference for the stable modules documented here.
+- Looking for internals: use the curated API reference for stable modules.
 
 ```{toctree}
 :maxdepth: 2
@@ -31,6 +48,8 @@ getting-started/quickstart
 :maxdepth: 2
 :caption: Guides
 
+guides/compiler-pipeline
+guides/benchmark-workflows
 guides/cli
 guides/project-structure
 
