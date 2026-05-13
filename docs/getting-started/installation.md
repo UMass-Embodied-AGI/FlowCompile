@@ -1,12 +1,17 @@
 # Installation
 
-FlowCompile currently installs from source. The documented path matches the repository setup in the project README.
+FlowCompile currently installs from source. The editable install exposes the
+`flowcompile` CLI and the `workflow_compiler` Python package used by the paper
+benchmark workflows.
 
 ## Requirements
 
-- Python 3.11 is the primary supported target in `setup.py`.
+- Python 3.11 is the primary supported target.
 - A virtual environment is strongly recommended.
-- Full runtime installs may pull heavyweight dependencies such as `torch`, `vllm`, and `litellm`.
+- Full experiment runs may use heavyweight dependencies such as `torch`, `vllm`,
+  `litellm`, and local model-serving packages.
+- Hosted or OpenAI-compatible model endpoints can be used through the model
+  configuration file without running local vLLM workers.
 
 ## Install from Source
 
@@ -20,9 +25,20 @@ conda activate flowcompile
 pip install -e .
 ```
 
+Confirm the CLI imports:
+
+```bash
+flowcompile --help
+```
+
+The CLI has a flat config-driven interface with commands such as
+`get-latency`, `prepare-data`, `profile`, `predict`, `test`, `runtime infer`,
+and `experiments correlation`.
+
 ## Install Docs Dependencies Only
 
-The documentation build deliberately avoids the project runtime dependency set. For docs work, install the docs toolchain separately:
+The documentation build deliberately avoids the project runtime dependency set.
+For docs work, install the docs toolchain separately:
 
 ```bash
 python -m pip install -r docs/requirements.txt
@@ -43,4 +59,3 @@ make -C docs html
 ```
 
 The HTML output is written to `docs/_build/html`.
-
