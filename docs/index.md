@@ -1,3 +1,7 @@
+---
+published: false
+---
+
 # FlowCompile Documentation
 
 FlowCompile is an optimizing compiler for structured LLM workflows. Given a

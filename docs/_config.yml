@@ -1,0 +1,11 @@
+title: FlowCompile
+description: FlowCompile documentation
+theme: jekyll-theme-primer
+
+exclude:
+  - index.md
+  - conf.py
+  - Makefile
+  - make.bat
+  - requirements.txt
+  - _build

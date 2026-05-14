@@ -1,0 +1,105 @@
+---
+layout: default
+title: FlowCompile Documentation
+---
+
+<!--
+  GitHub Pages is currently serving the docs/ directory through Jekyll.
+  Sphinx ignores this .html source file and builds from index.md instead.
+-->
+
+<h1>FlowCompile Documentation</h1>
+
+<p>
+  FlowCompile is an optimizing compiler for structured LLM workflows. Given a
+  workflow graph, validation/profile data, and a design space over model
+  choices, reasoning budgets, and workflow structures, it compiles a reusable
+  set of workflow-level configurations that span the accuracy-latency Pareto
+  frontier.
+</p>
+
+<p>The implementation follows the paper pipeline closely:</p>
+
+<ol>
+  <li>Collect workflow traces with a high-capacity reference model.</li>
+  <li>Induce and filter sub-agent training examples from those traces.</li>
+  <li>Profile each sub-agent across the configured model and reasoning-budget space.</li>
+  <li>Compose sub-agent profiles through a structure-aware proxy.</li>
+  <li>
+    Emit <code>flowcompile.compiled.v2</code> runtime configurations for
+    validation, deployment-time selection, or optional routing.
+  </li>
+</ol>
+
+<h2>Core Capabilities</h2>
+
+<ul>
+  <li>Compile Pareto-optimal workflow configurations before deployment.</li>
+  <li>
+    Search model assignment, reasoning budget, and inferred workflow-structure
+    choices with one flat experiment config.
+  </li>
+  <li>
+    Define workflows in a Python DSL with reusable <code>AgentNode</code> and
+    <code>ToolNode</code> components.
+  </li>
+  <li>
+    Run latency benchmarking, data preparation, profiling, prediction, testing,
+    runtime inference, and correlation analysis from the <code>flowcompile</code> CLI.
+  </li>
+  <li>
+    Reuse compiled configurations with preference-based, constraint-based, or
+    KNN-router selection at runtime.
+  </li>
+</ul>
+
+<h2>Start Here</h2>
+
+<ul>
+  <li>New to the project: begin with installation, configuration, and quickstart.</li>
+  <li>
+    Reproducing the paper workflow: read the compiler pipeline and benchmark
+    workflow guides.
+  </li>
+  <li>Integrating experiments: use the CLI guide and project structure overview.</li>
+  <li>Extending the codebase: read the benchmark and workflow extension guides.</li>
+  <li>Looking for internals: use the curated API reference for stable modules.</li>
+</ul>
+
+<h2>Getting Started</h2>
+
+<ul>
+  <li><a href="getting-started/installation">Installation</a></li>
+  <li><a href="getting-started/configuration">Configuration</a></li>
+  <li><a href="getting-started/quickstart">Quickstart</a></li>
+</ul>
+
+<h2>Guides</h2>
+
+<ul>
+  <li><a href="guides/compiler-pipeline">Compiler Pipeline</a></li>
+  <li><a href="guides/benchmark-workflows">Benchmark Workflows</a></li>
+  <li><a href="guides/cli">CLI Guide</a></li>
+  <li><a href="guides/project-structure">Project Structure</a></li>
+  <li><a href="extending/benchmarks">Adding a Benchmark</a></li>
+  <li><a href="extending/workflows">Adding a Workflow</a></li>
+</ul>
+
+<h2>API Reference</h2>
+
+<ul>
+  <li><a href="api/index">API Reference</a></li>
+</ul>
+
+<h2>Build the Docs Locally</h2>
+
+<p>Install the docs dependencies and run Sphinx from the repository root:</p>
+
+<div class="language-bash highlighter-rouge">
+  <div class="highlight">
+    <pre class="highlight"><code>python -m pip install -r docs/requirements.txt
+python -m sphinx -n -W --keep-going -b html docs docs/_build/html</code></pre>
+  </div>
+</div>
+
+<p>The generated site will be written to <code>docs/_build/html</code>.</p>
