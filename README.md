@@ -228,11 +228,14 @@ For detailed extension guides, see the
 If you find FlowCompile useful for your research or projects, please cite:
 
 ```bibtex
-@misc{li2026flowcompile,
-  title = {FlowCompile: An Optimizing Compiler for Structured LLM Workflows},
-  author = {Li, Junyan and Hong, Zhang-Wei and Shen, Maohao and Zhang, Yang and Gan, Chuang},
-  year = {2026},
-  note = {Preprint},
-  url = {https://github.com/UMass-Embodied-AGI/FlowCompile}
+@misc{li2026flowcompileoptimizingcompilerstructured,
+      title={FlowCompile: An Optimizing Compiler for Structured LLM Workflows}, 
+      author={Junyan Li and Zhang-Wei Hong and Maohao Shen and Yang Zhang and Chuang Gan},
+      year={2026},
+      eprint={2605.13647},
+      archivePrefix={arXiv},
+      primaryClass={cs.CL},
+      url={https://arxiv.org/abs/2605.13647}, 
+}
 }
 ```
