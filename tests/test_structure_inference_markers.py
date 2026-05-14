@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from workflow_compiler.dsl.torchlike import AgentNode, WorkflowModule
+from flowcompile.dsl.torchlike import AgentNode, WorkflowModule
 
 
 class _MarkerWorkflow(WorkflowModule):

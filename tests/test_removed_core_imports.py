@@ -6,13 +6,13 @@ from pathlib import Path
 
 _BANNED_IMPORT_PATTERNS = [
     re.compile(
-        r"^\s*from\s+workflow_compiler\.core\.(evaluator|runners|mcp_client|memory_estimator|benchmark_registry)\b"
+        r"^\s*from\s+flowcompile\.core\.(evaluator|runners|mcp_client|memory_estimator|benchmark_registry)\b"
     ),
     re.compile(
-        r"^\s*import\s+workflow_compiler\.core\.(evaluator|runners|mcp_client|memory_estimator|benchmark_registry)\b"
+        r"^\s*import\s+flowcompile\.core\.(evaluator|runners|mcp_client|memory_estimator|benchmark_registry)\b"
     ),
-    re.compile(r"^\s*from\s+workflow_compiler\.core\.prompts\.optimize_prompt\b"),
-    re.compile(r"^\s*import\s+workflow_compiler\.core\.prompts\.optimize_prompt\b"),
+    re.compile(r"^\s*from\s+flowcompile\.core\.prompts\.optimize_prompt\b"),
+    re.compile(r"^\s*import\s+flowcompile\.core\.prompts\.optimize_prompt\b"),
 ]
 
 

@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from workflow_compiler.core.analysis.prediction import calculate_workflow_accuracy, calculate_workflow_metrics
-from workflow_compiler.dsl.runtime import DslWorkflowRunner
-from workflow_compiler.workflows.dsl_registry import get_workflow_module
+from flowcompile.core.analysis.prediction import calculate_workflow_accuracy, calculate_workflow_metrics
+from flowcompile.dsl.runtime import DslWorkflowRunner
+from flowcompile.workflows.dsl_registry import get_workflow_module
 
 
 def test_workflow_forward_signature_is_unified():

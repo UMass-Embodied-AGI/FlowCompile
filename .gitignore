@@ -233,7 +233,7 @@ figures/
 temp/
 logs/
 baselines/
-workflow_compiler.egg-info/
+flowcompile.egg-info/
 .pytest_cache/
 
 # Data outputs (keep scripts under data/)

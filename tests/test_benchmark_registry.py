@@ -7,14 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from workflow_compiler.benchmarks import (
+from flowcompile.benchmarks import (
     get_benchmark,
     get_benchmark_info,
     list_benchmarks,
     register_benchmark,
 )
-from workflow_compiler.benchmarks import registry as benchmark_registry
-from workflow_compiler.compiler.validation import _dataset_to_workflow_type, _metric_for_dataset
+from flowcompile.benchmarks import registry as benchmark_registry
+from flowcompile.compiler.validation import _dataset_to_workflow_type, _metric_for_dataset
 
 
 @pytest.fixture()
@@ -43,8 +43,8 @@ def _install_temp_benchmark_module(tmp_path: Path, module_name: str) -> tuple:
         """
         from typing import Any, Dict, List, Tuple
 
-        from workflow_compiler.benchmarks import register_benchmark
-        from workflow_compiler.benchmarks.benchmark import BaseBenchmark
+        from flowcompile.benchmarks import register_benchmark
+        from flowcompile.benchmarks.benchmark import BaseBenchmark
 
 
         @register_benchmark()
@@ -74,7 +74,7 @@ def _install_temp_benchmark_module(tmp_path: Path, module_name: str) -> tuple:
     module_path = tmp_path / f"{module_name}.py"
     module_path.write_text(module_code, encoding="utf-8")
 
-    package = importlib.import_module("workflow_compiler.benchmarks")
+    package = importlib.import_module("flowcompile.benchmarks")
     package_path = str(tmp_path)
     package.__path__.append(package_path)
     return package, package_path
@@ -123,4 +123,4 @@ def test_registry_auto_discovers_temp_module_and_can_instantiate(tmp_path: Path,
     finally:
         if package_path in package.__path__:
             package.__path__.remove(package_path)
-        sys.modules.pop(f"workflow_compiler.benchmarks.{module_name}", None)
+        sys.modules.pop(f"flowcompile.benchmarks.{module_name}", None)

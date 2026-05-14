@@ -30,14 +30,15 @@ setup(
     description="FlowCompile: Pareto-optimal agentic workflow compilation",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    packages=find_packages(include=["workflow_compiler", "workflow_compiler.*"]),
+    package_dir={"": "src"},
+    packages=find_packages(where="src", include=["flowcompile", "flowcompile.*"]),
     include_package_data=True,
-    package_data={"workflow_compiler.dsl": ["schema.json"]},
+    package_data={"flowcompile.dsl": ["schema.json"]},
     python_requires=">=3.8",
     install_requires=read_requirements(requirements_file),
     entry_points={
         "console_scripts": [
-            "flowcompile=workflow_compiler.core.cli:main",
+            "flowcompile=flowcompile.core.cli:main",
         ]
     },
     classifiers=[

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from workflow_compiler.dsl.structures import _remove_nodes
+from flowcompile.dsl.structures import _remove_nodes
 
 
 def test_remove_nodes_rewrites_output_ref_from_graph_predecessor():

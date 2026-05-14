@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from workflow_compiler.core import cli
+from flowcompile.core import cli
 
 
 def _write_json(path: Path, payload):
@@ -472,7 +472,7 @@ def test_runtime_infer_rejects_deprecated_nested_runtime_budget_key_in_yaml(tmp_
     ("raw_budget", "expected_budget"),
     [
         ("0.2", 0.2),
-        ("low", 0.001),
+        ("low", 0.01),
         ("medium", 0.5),
         ("high", 0.9),
         ("xhigh", 0.999),

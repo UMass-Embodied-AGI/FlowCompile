@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import pytest
 
-from workflow_compiler.compiler.validation import (
+from flowcompile.compiler.validation import (
     _active_llm_refs_for_structure,
     _build_evaluation_items,
     _build_llm_configs_for_workflow,
     _sample_pareto_even_by_latency,
     _validate_active_llm_refs,
 )
-from workflow_compiler.workflows.dsl_registry import get_workflow_module
+from flowcompile.workflows.dsl_registry import get_workflow_module
 
 
 def _cfg(latency: float, rank: int) -> dict:

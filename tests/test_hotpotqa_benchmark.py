@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from workflow_compiler.benchmarks.hotpotqa import HotpotQABenchmark
+from flowcompile.benchmarks.hotpotqa import HotpotQABenchmark
 
 
 def test_hotpotqa_normalize_answer_handles_none():

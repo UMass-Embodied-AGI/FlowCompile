@@ -10,7 +10,7 @@ definition.
 Add a package under:
 
 ```text
-workflow_compiler/workflows/<workflow_name>/
+src/flowcompile/workflows/<workflow_name>/
 ```
 
 Typical contents:
@@ -19,7 +19,7 @@ Typical contents:
 - `agents.py` for custom `SubAgent` implementations when needed
 - `__init__.py` to re-export the workflow class
 
-The repository includes a template package under `workflow_compiler/workflows/template/`.
+The repository includes a template package under `src/flowcompile/workflows/template/`.
 
 If you add custom agents, subclass `SubAgent` and implement `run(...) ->
 AgentResult`. Let `SubAgent.execute` record metadata such as token counts,
@@ -31,7 +31,7 @@ A typical DSL workflow subclasses `WorkflowModule` and defines a
 `forward(query)` method:
 
 ```python
-from workflow_compiler.dsl.torchlike import WorkflowModule, AgentNode, ToolNode
+from flowcompile.dsl.torchlike import WorkflowModule, AgentNode, ToolNode
 
 
 class MyWorkflowDSL(WorkflowModule):
@@ -74,17 +74,17 @@ class MyWorkflowDSL(WorkflowModule):
 
 ## 3. Register the Workflow
 
-Update `workflow_compiler/workflows/dsl_registry.py` so the new `workflow_type` resolves to your DSL class.
+Update `src/flowcompile/workflows/dsl_registry.py` so the new `workflow_type` resolves to your DSL class.
 
 The current flat CLI schema accepts the built-in workflow types `math`,
 `gsm8k`, `hotpotqa`, and `livecodebench`. A genuinely new workflow type also
-requires updating the CLI validator in `workflow_compiler/core/cli.py` and the
+requires updating the CLI validator in `src/flowcompile/core/cli.py` and the
 runtime support paths that dispatch by workflow type.
 
 ## 4. Let Auto-Backward Handle the Proxy
 
 `WorkflowModule.backward(payload)` defaults to the auto-backward proxy in
-`workflow_compiler.dsl.auto_backward`. It composes profiled sub-agent accuracy
+`flowcompile.dsl.auto_backward`. It composes profiled sub-agent accuracy
 and latency according to the captured graph and inferred structure.
 
 Only implement a custom `backward(payload)` when the workflow uses conditional
@@ -98,7 +98,7 @@ implementations receive:
 ## 5. Update Runtime Preprocess and Trace Logic If Needed
 
 If the new workflow changes expected inputs or outputs, update the relevant
-helpers in `workflow_compiler/dsl/runtime.py`:
+helpers in `src/flowcompile/dsl/runtime.py`:
 
 - `_preprocess_query`
 - `_build_trace_*`
@@ -122,7 +122,7 @@ Validate that:
 
 ```bash
 python - <<'PY'
-from workflow_compiler.workflows.dsl_registry import get_workflow_module
+from flowcompile.workflows.dsl_registry import get_workflow_module
 
 workflow = get_workflow_module("myworkflow")
 for structure in workflow.enumerate_structures():
@@ -132,4 +132,4 @@ PY
 
 ## Related API
 
-The workflow registry helpers are documented in the curated API page for `workflow_compiler.workflows`.
+The workflow registry helpers are documented in the curated API page for `flowcompile.workflows`.

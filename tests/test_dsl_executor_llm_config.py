@@ -4,8 +4,8 @@ import asyncio
 
 import pytest
 
-from workflow_compiler.dsl.executor import DslExecutor
-from workflow_compiler.dsl import runtime
+from flowcompile.dsl.executor import DslExecutor
+from flowcompile.dsl import runtime
 
 
 def test_executor_raises_when_active_operator_setting_missing():

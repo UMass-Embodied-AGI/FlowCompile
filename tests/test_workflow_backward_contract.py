@@ -3,7 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from workflow_compiler.workflows.dsl_registry import get_workflow_module
+from flowcompile.workflows.dsl_registry import get_workflow_module
 
 
 def _agent_df(prefix: str) -> pd.DataFrame:

@@ -1,6 +1,6 @@
 import os
 
-from workflow_compiler.compiler import latency
+from flowcompile.compiler import latency
 
 
 def test_configure_cuda_multiprocessing_sets_vllm_env(monkeypatch):

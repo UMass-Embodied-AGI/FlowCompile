@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from workflow_compiler.compiler import pipeline
-from workflow_compiler.compiler.pipeline import compile_pareto
-from workflow_compiler.workflows.dsl_registry import get_workflow_module
+from flowcompile.compiler import pipeline
+from flowcompile.compiler.pipeline import compile_pareto
+from flowcompile.workflows.dsl_registry import get_workflow_module
 
 
 def _write_json(path: Path, payload) -> None:

@@ -1,8 +1,8 @@
-"""Unit tests for workflow_compiler.routers module."""
+"""Unit tests for flowcompile.routers module."""
 
 import pytest
 
-from workflow_compiler.routers import Router, RoutingResult, get_router, list_routers
+from flowcompile.routers import Router, RoutingResult, get_router, list_routers
 
 
 class TestRoutingResult:

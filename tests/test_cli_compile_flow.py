@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 import os
 
-from workflow_compiler.core import cli
+from flowcompile.core import cli
 
 
 def _dummy_prepare_args():

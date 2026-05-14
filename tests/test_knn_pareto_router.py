@@ -11,12 +11,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-# Add parent directory to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Add src directory to path for direct repository test runs.
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 
 def test_router_import():
-    from workflow_compiler.routers import (
+    from flowcompile.routers import (
         KNNRouter,
         Router,
         RoutingResult,
@@ -34,7 +34,7 @@ def test_router_import():
 
 
 def test_router_registry():
-    from workflow_compiler.routers import get_router, list_routers
+    from flowcompile.routers import get_router, list_routers
 
     available = list_routers()
     assert available == ["knn"]
@@ -45,7 +45,7 @@ def test_router_registry():
 
 
 def test_embedding_cache():
-    from workflow_compiler.routers.knn import EmbeddingCache
+    from flowcompile.routers.knn import EmbeddingCache
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pkl") as f:
         cache_file = f.name
@@ -65,7 +65,7 @@ def test_embedding_cache():
 
 
 def test_pareto_utilities():
-    from workflow_compiler.routers.knn import filter_pareto_optimal, is_pareto_efficient
+    from flowcompile.routers.knn import filter_pareto_optimal, is_pareto_efficient
 
     costs = np.array(
         [
@@ -86,7 +86,7 @@ def test_pareto_utilities():
 
 
 def test_router_defaults_to_longformer():
-    from workflow_compiler.routers.knn import KNNRouter
+    from flowcompile.routers.knn import KNNRouter
 
     router = KNNRouter()
     assert router.embedding_model == "allenai/longformer-base-4096"
@@ -94,7 +94,7 @@ def test_router_defaults_to_longformer():
 
 
 def test_fit_reuses_cached_embeddings(monkeypatch, tmp_path: Path):
-    from workflow_compiler.routers.knn import KNNRouter
+    from flowcompile.routers.knn import KNNRouter
 
     cache_file = tmp_path / "knn_embeddings.pkl"
     router = KNNRouter(embedding_cache_file=str(cache_file))
@@ -126,7 +126,7 @@ def test_fit_reuses_cached_embeddings(monkeypatch, tmp_path: Path):
 
 
 def test_build_runtime_candidates_uses_subset_and_full_fallback(monkeypatch):
-    from workflow_compiler.routers.knn import KNNRouter
+    from flowcompile.routers.knn import KNNRouter
 
     class FakeWorkflowModule:
         workflow_type = "math"
@@ -180,7 +180,7 @@ def test_build_runtime_candidates_uses_subset_and_full_fallback(monkeypatch):
     router._post_fit_setup()
 
     monkeypatch.setattr(router, "_get_neighbors", lambda query: (["subset_q"], [0.1]))
-    monkeypatch.setattr("workflow_compiler.routers.knn.get_workflow_module", lambda workflow_type: FakeWorkflowModule())
+    monkeypatch.setattr("flowcompile.routers.knn.get_workflow_module", lambda workflow_type: FakeWorkflowModule())
 
     configs, metadata = router.build_runtime_candidates({"problem": "new query", "id": "q_new"}, "math")
 

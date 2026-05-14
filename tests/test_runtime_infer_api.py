@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-import workflow_compiler.runtime.engine as runtime_engine
-import workflow_compiler.runtime.infer as runtime_infer
+import flowcompile.runtime.engine as runtime_engine
+import flowcompile.runtime.infer as runtime_infer
 
 
 def _compiled_config() -> dict:

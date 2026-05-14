@@ -1,11 +1,11 @@
 """
-Unit tests for workflow_compiler.core.llm.config module.
+Unit tests for flowcompile.core.llm.config module.
 """
 
 import pytest
 import tempfile
 from pathlib import Path
-from workflow_compiler.core.llm.config import (
+from flowcompile.core.llm.config import (
     load_config,
     parse_llm_config,
     create_experiment_config,

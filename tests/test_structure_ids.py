@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Any, List
 
-from workflow_compiler.workflows.dsl_registry import get_workflow_module
-from workflow_compiler.dsl.structures import apply_structure
+from flowcompile.workflows.dsl_registry import get_workflow_module
+from flowcompile.dsl.structures import apply_structure
 
 
 def _collect_state_refs(obj: Any) -> List[str]:

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from workflow_compiler.core import cli
+from flowcompile.core import cli
 
 
 def _write_json(path: Path, payload):

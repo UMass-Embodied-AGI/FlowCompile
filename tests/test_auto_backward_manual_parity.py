@@ -5,7 +5,7 @@ from typing import Any, Dict
 import numpy as np
 import pandas as pd
 
-from workflow_compiler.workflows.dsl_registry import get_workflow_module
+from flowcompile.workflows.dsl_registry import get_workflow_module
 
 
 def _math_metrics_multi() -> Dict[str, pd.DataFrame]:

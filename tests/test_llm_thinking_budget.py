@@ -5,8 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from workflow_compiler.core.llm import client
-from workflow_compiler.core.llm.thinking_budget import (
+from flowcompile.core.llm import client
+from flowcompile.core.llm.thinking_budget import (
     DEFAULT_THINKING_BUDGET_CUTOFF_TEXT,
 )
 

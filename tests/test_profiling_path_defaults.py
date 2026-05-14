@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from workflow_compiler.compiler.profiling import get_experiment_config
-from workflow_compiler.compiler import profiling
+from flowcompile.compiler.profiling import get_experiment_config
+from flowcompile.compiler import profiling
 
 
 def test_get_experiment_config_prefers_01_profile_aggregated(monkeypatch, tmp_path):

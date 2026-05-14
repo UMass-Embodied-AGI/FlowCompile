@@ -4,8 +4,8 @@ from types import SimpleNamespace
 
 import torch
 
-from workflow_compiler.core.llm.thinking_budget import tensor_forces_token
-from workflow_compiler.ext.vllm_plugins.thinking_budget import (
+from flowcompile.core.llm.thinking_budget import tensor_forces_token
+from flowcompile.ext.vllm_plugins.thinking_budget import (
     ThinkingBudgetLogitsProcessor,
 )
 
@@ -23,7 +23,7 @@ class _FakeTokenizer:
 
 def _build_processor(monkeypatch):
     monkeypatch.setattr(
-        "workflow_compiler.ext.vllm_plugins.thinking_budget.AutoTokenizer.from_pretrained",
+        "flowcompile.ext.vllm_plugins.thinking_budget.AutoTokenizer.from_pretrained",
         lambda *args, **kwargs: _FakeTokenizer(),
     )
     vllm_config = SimpleNamespace(

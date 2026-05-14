@@ -10,7 +10,7 @@ Add a benchmark that works with:
 
 - `flowcompile test`
 - `flowcompile runtime infer`
-- benchmark discovery through `workflow_compiler.benchmarks.registry`
+- benchmark discovery through `flowcompile.benchmarks.registry`
 
 For most cases, you only need one new module plus the dataset files it points to.
 
@@ -19,7 +19,7 @@ For most cases, you only need one new module plus the dataset files it points to
 Add:
 
 ```text
-workflow_compiler/benchmarks/<name>.py
+src/flowcompile/benchmarks/<name>.py
 ```
 
 Use the repository template referenced by the maintainer guide as the starting
@@ -72,7 +72,7 @@ necessary. Verify registration with:
 
 ```bash
 python - <<'PY'
-from workflow_compiler.benchmarks import list_benchmarks
+from flowcompile.benchmarks import list_benchmarks
 for row in list_benchmarks(detailed=True):
     print(row["name"], row.get("aliases", []), row.get("workflow_type"), row.get("metric_name"))
 PY
@@ -118,4 +118,4 @@ Any alias listed in `ALIASES` should resolve to the same benchmark class.
 
 ## Related API
 
-The benchmark registration helpers are documented in the API reference for `workflow_compiler.benchmarks.registry`.
+The benchmark registration helpers are documented in the API reference for `flowcompile.benchmarks.registry`.

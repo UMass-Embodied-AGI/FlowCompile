@@ -6,8 +6,8 @@ from typing import Dict
 import pandas as pd
 import pytest
 
-from workflow_compiler.dsl.torchlike import AgentNode, WorkflowModule
-from workflow_compiler.workflows.dsl_registry import get_workflow_module
+from flowcompile.dsl.torchlike import AgentNode, WorkflowModule
+from flowcompile.workflows.dsl_registry import get_workflow_module
 
 
 def _single_df(setting: str, accuracy: float, latency: float) -> pd.DataFrame:
@@ -338,9 +338,9 @@ def test_unsupported_conditional_requires_manual_backward():
 
 
 def test_legacy_formula_helpers_are_not_exported():
-    code_pkg = importlib.import_module("workflow_compiler.workflows.code")
-    math_pkg = importlib.import_module("workflow_compiler.workflows.math")
-    hotpot_pkg = importlib.import_module("workflow_compiler.workflows.hotpotqa")
+    code_pkg = importlib.import_module("flowcompile.workflows.code")
+    math_pkg = importlib.import_module("flowcompile.workflows.math")
+    hotpot_pkg = importlib.import_module("flowcompile.workflows.hotpotqa")
 
     assert not hasattr(code_pkg, "calculate_code_workflow_accuracy")
     assert not hasattr(code_pkg, "calculate_expected_fix_attempts")

@@ -1,7 +1,7 @@
 # Installation
 
 FlowCompile currently installs from source. The editable install exposes the
-`flowcompile` CLI and the `workflow_compiler` Python package used by the paper
+`flowcompile` CLI and the `flowcompile` Python package used by the paper
 benchmark workflows.
 
 ## Requirements

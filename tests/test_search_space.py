@@ -3,7 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from workflow_compiler.core.analysis.prediction import (
+from flowcompile.core.analysis.prediction import (
     SearchSpaceSpec,
     apply_search_space_to_subagents,
     apply_structure_constraints,

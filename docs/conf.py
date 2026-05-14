@@ -7,9 +7,10 @@ from pathlib import Path
 
 DOCS_ROOT = Path(__file__).resolve().parent
 REPO_ROOT = DOCS_ROOT.parent
-PACKAGE_INIT = REPO_ROOT / "workflow_compiler" / "__init__.py"
+SRC_ROOT = REPO_ROOT / "src"
+PACKAGE_INIT = SRC_ROOT / "flowcompile" / "__init__.py"
 
-sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(SRC_ROOT))
 
 
 def read_version() -> str:

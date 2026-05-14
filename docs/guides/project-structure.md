@@ -11,13 +11,13 @@ data/                 Prepared validate/test splits and prompt assets
 docs/                 Sphinx documentation site
 scripts/              Dataset and local serving helpers
 tests/                Unit and smoke tests
-workflow_compiler/    Main Python package
+src/flowcompile/    Main Python package
 ```
 
 ## Package Layout
 
 ```text
-workflow_compiler/
+src/flowcompile/
   benchmarks/   Dataset-specific evaluation and registration
   compiler/     Latency, trace prep, agent data, profiling, prediction, validation
   core/         CLI, logging, data paths, LLM client helpers, analysis
@@ -30,13 +30,13 @@ workflow_compiler/
 
 ## Where to Look First
 
-- CLI entrypoint and flat config validation: `workflow_compiler/core/cli.py`
-- Compiler pipeline and compiled JSON output: `workflow_compiler/compiler/`
-- Structure-aware proxy and DSL capture: `workflow_compiler/dsl/`
-- Built-in workflows: `workflow_compiler/workflows/`
-- Benchmarks and metrics: `workflow_compiler/benchmarks/`
-- Runtime selection and execution: `workflow_compiler/runtime/`
-- Optional per-query routing: `workflow_compiler/routers/`
+- CLI entrypoint and flat config validation: `src/flowcompile/core/cli.py`
+- Compiler pipeline and compiled JSON output: `src/flowcompile/compiler/`
+- Structure-aware proxy and DSL capture: `src/flowcompile/dsl/`
+- Built-in workflows: `src/flowcompile/workflows/`
+- Benchmarks and metrics: `src/flowcompile/benchmarks/`
+- Runtime selection and execution: `src/flowcompile/runtime/`
+- Optional per-query routing: `src/flowcompile/routers/`
 
 ## Configuration and Results
 

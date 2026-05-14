@@ -1,10 +1,10 @@
 """
-Unit tests for workflow_compiler.core.analysis module.
+Unit tests for flowcompile.core.analysis module.
 """
 
 import pytest
 import numpy as np
-from workflow_compiler.core.analysis import (
+from flowcompile.core.analysis import (
     MODEL_TO_HF_NAME,
     get_hf_model_name,
     extract_model_name,

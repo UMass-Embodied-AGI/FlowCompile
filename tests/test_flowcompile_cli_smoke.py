@@ -87,15 +87,16 @@ def test_flowcompile_compile_and_runtime_surface(tmp_path: Path):
     )
     env = dict(os.environ)
     existing_pythonpath = env.get("PYTHONPATH")
+    src_root = repo_root / "src"
     env["PYTHONPATH"] = (
-        f"{repo_root}:{existing_pythonpath}" if existing_pythonpath else str(repo_root)
+        f"{src_root}:{existing_pythonpath}" if existing_pythonpath else str(src_root)
     )
 
     # Compile (predict)
     cmd = [
         sys.executable,
         "-m",
-        "workflow_compiler.core.cli",
+        "flowcompile.core.cli",
         "--config",
         str(config_file),
         "predict",
@@ -124,7 +125,7 @@ def test_flowcompile_compile_and_runtime_surface(tmp_path: Path):
     cmd = [
         sys.executable,
         "-m",
-        "workflow_compiler.core.cli",
+        "flowcompile.core.cli",
         "runtime",
         "select",
     ]

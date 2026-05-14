@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from workflow_compiler.core import cli
+from flowcompile.core import cli
 
 
 def test_experiments_correlation_from_config_minimal(monkeypatch, tmp_path):
@@ -247,7 +247,7 @@ def test_cli_main_help_is_banner_free(monkeypatch, capsys):
         cli.main()
     assert excinfo.value.code == 0
     captured = capsys.readouterr()
-    assert "Pareto-optimal agentic workflow compilation" not in captured.err
+    assert "[ FlowCompile ] :: Agentic Workflow Compiler" not in captured.err
 
 
 def test_cli_main_prints_banner_once_for_tty(monkeypatch, capsys):
@@ -258,8 +258,8 @@ def test_cli_main_prints_banner_once_for_tty(monkeypatch, capsys):
     monkeypatch.setattr("sys.stdout.isatty", lambda: False)
     assert cli.main() == 0
     captured = capsys.readouterr()
-    assert "Pareto-optimal agentic workflow compilation" in captured.err
-    assert captured.err.count("Pareto-optimal agentic workflow compilation") == 1
+    assert "[ FlowCompile ] :: Agentic Workflow Compiler" in captured.err
+    assert captured.err.count("[ FlowCompile ] :: Agentic Workflow Compiler") == 1
 
 
 def test_cli_main_no_banner_flag_suppresses_banner(monkeypatch, capsys):
@@ -273,11 +273,11 @@ def test_cli_main_no_banner_flag_suppresses_banner(monkeypatch, capsys):
     monkeypatch.setattr("sys.stdout.isatty", lambda: False)
     assert cli.main() == 0
     captured = capsys.readouterr()
-    assert "Pareto-optimal agentic workflow compilation" not in captured.err
+    assert "[ FlowCompile ] :: Agentic Workflow Compiler" not in captured.err
 
 
 def test_correlation_module_import_smoke():
-    from workflow_compiler.experiments import correlation
+    from flowcompile.experiments import correlation
 
     assert callable(correlation.main)
-    assert "workflow_compiler/experiments/correlation.py" in correlation.__file__.replace("\\", "/")
+    assert "flowcompile/experiments/correlation.py" in correlation.__file__.replace("\\", "/")

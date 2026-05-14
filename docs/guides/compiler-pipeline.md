@@ -10,7 +10,7 @@ configurations.
 
 The compiler needs:
 
-- A Python DSL workflow from `workflow_compiler/workflows/`.
+- A Python DSL workflow from `src/flowcompile/workflows/`.
 - A labeled validation/profile split.
 - A local model config from `configs/config.yaml`.
 - A flat experiment config with `search_axes` and `search_budgets`.

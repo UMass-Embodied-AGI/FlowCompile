@@ -3,7 +3,7 @@
 The paper evaluates FlowCompile on four public benchmarks across math,
 multi-hop QA, and code reasoning. The repository exposes those workloads through
 flat configs in `configs/examples/` and Python DSL workflows in
-`workflow_compiler/workflows/`.
+`src/flowcompile/workflows/`.
 
 ## Built-In Benchmarks
 

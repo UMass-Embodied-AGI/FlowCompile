@@ -215,10 +215,10 @@ flowcompile --config "$CONFIG" experiments correlation
 
 ## Extending FlowCompile
 
-- Add new benchmarks through `workflow_compiler/benchmarks/`.
-- Add or modify structured workflows through `workflow_compiler/workflows/`.
+- Add new benchmarks through `src/flowcompile/benchmarks/`.
+- Add or modify structured workflows through `src/flowcompile/workflows/`.
 - Define custom workflow structure with the Python DSL under
-  `workflow_compiler/dsl/`.
+  `src/flowcompile/dsl/`.
 
 For detailed extension guides, see the
 [documentation](https://umass-embodied-agi.github.io/FlowCompile/).
@@ -236,6 +236,5 @@ If you find FlowCompile useful for your research or projects, please cite:
       archivePrefix={arXiv},
       primaryClass={cs.CL},
       url={https://arxiv.org/abs/2605.13647}, 
-}
 }
 ```
